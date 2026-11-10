@@ -24,6 +24,20 @@ set -a; . ./.env; set +a; go run ./cmd/server     # :8790
 cd frontend && npm install && npm run dev          # :5190，/api 代理到 :8790
 ```
 
+## 開發模擬器
+
+`.env` 設 `DEV_SIMULATOR=1`：送訊走假 sender（`internal/ig/fake.go`），後台收件匣出現「模擬訊息」按鈕（`POST /api/dev/simulate`），組出與真 webhook 同形的 payload 走同一條入庫路徑。
+
+- 測試：`TEST_DATABASE_URL=postgres://litty:litty@localhost:54330/litty_test?sslmode=disable go test ./...`（`litty_test` 庫需先建；未設時整合測試跳過）
+- webhook 公開路徑：`GET/POST /webhooks/instagram`（驗 `X-Hub-Signature-256`）；串真 IG 時需公開 HTTPS
+- 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）
+
+## TODO（MVP 期間範圍外，畢業時進 ledger）
+
+- 收到的媒體 URL 會過期：目前只存 URL，需改為即時下載到自有儲存
+- 已讀、reaction、訊息收回等 webhook 事件尚未處理（worker 直接略過）
+- ig_accounts.access_token 目前由 env 兜底；設定頁做 OAuth 後改存 DB 並處理 60 天換發
+
 ## IG API 限制（設計時以此為準）
 
 - 只能在用戶最後一則訊息後 24h 內回覆（`HUMAN_AGENT` tag 可延到 7 天，限真人）

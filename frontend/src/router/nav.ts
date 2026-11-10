@@ -15,7 +15,7 @@ const placeholder = () => import('@/views/PlaceholderView.vue')
 
 export const navItems: NavItem[] = [
   { path: 'dashboard', name: 'dashboard', title: '總覽', icon: markRaw(House), component: () => import('@/views/DashboardView.vue'), mobile: true },
-  { path: 'inbox', name: 'inbox', title: '收件匣', icon: markRaw(ChatDotRound), component: placeholder, mobile: true },
+  { path: 'inbox/:id?', name: 'inbox', title: '收件匣', icon: markRaw(ChatDotRound), component: () => import('@/views/inbox/InboxView.vue'), mobile: true },
   { path: 'automation', name: 'automation', title: '自動回覆', icon: markRaw(MagicStick), component: placeholder, mobile: true },
   { path: 'schedule', name: 'schedule', title: '排程', icon: markRaw(Calendar), component: placeholder, mobile: true },
   { path: 'contacts', name: 'contacts', title: '顧客', icon: markRaw(User), component: placeholder, mobile: false },

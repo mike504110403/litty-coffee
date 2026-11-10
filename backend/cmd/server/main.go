@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os/signal"
 	"strings"
@@ -14,6 +15,9 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
 	"github.com/mike504110403/litty-coffee/backend/internal/httpapi"
+	"github.com/mike504110403/litty-coffee/backend/internal/ig"
+	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
+	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
 
 func main() {
@@ -38,7 +42,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{DB: pool, Auth: authSvc}).Routes(), ReadHeaderTimeout: 10 * time.Second}
+	hub := realtime.NewHub()
+	api := &httpapi.Server{DB: pool, Auth: authSvc, Hub: hub, IGAppSecret: cfg.IGAppSecret, IGVerifyToken: cfg.IGVerifyToken}
+	var messenger ig.Messenger = ig.NewClient(cfg.IGAPIBase)
+	if cfg.DevSimulator {
+		api.Fake = ig.NewFake()
+		messenger = api.Fake
+		log.Print("DEV_SIMULATOR=1: IG 送訊走假 sender，/api/dev/simulate 已開啟")
+	}
+	api.Inbox = inbox.NewService(pool, messenger, hub)
+	api.Inbox.DefaultToken = cfg.IGAccessToken
+	go api.Inbox.RunWorker(ctx)
+
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return ctx }} // 關機時一併結束 SSE 長連線
 	go func() {
 		log.Printf("listening on %s", cfg.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

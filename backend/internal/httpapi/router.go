@@ -10,11 +10,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
+	"github.com/mike504110403/litty-coffee/backend/internal/ig"
+	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
+	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
 
 type Server struct {
-	DB   *pgxpool.Pool
-	Auth *auth.Service
+	DB    *pgxpool.Pool
+	Auth  *auth.Service
+	Inbox *inbox.Service
+	Hub   *realtime.Hub
+	Fake  *ig.Fake // 非 nil＝開發模擬模式
+
+	IGAppSecret   string
+	IGVerifyToken string
 }
 
 func (s *Server) Routes() http.Handler {
@@ -29,12 +38,22 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	r.Get("/webhooks/instagram", s.webhookVerify)
+	r.Post("/webhooks/instagram", s.webhookReceive)
+
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
 		r.Group(func(r chi.Router) {
 			r.Use(s.Auth.Middleware)
 			r.Get("/auth/me", s.me)
+			s.inboxRoutes(r)
+			r.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
+			})
+			if s.Fake != nil {
+				r.Post("/dev/simulate", s.simulate)
+			}
 		})
 	})
 	return r

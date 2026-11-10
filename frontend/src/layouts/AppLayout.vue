@@ -1,19 +1,30 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
 import { navItems } from '@/router/nav'
 import { useAuthStore } from '@/stores/auth'
+import { useInboxStore } from '@/stores/inbox'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const inbox = useInboxStore()
+
+onMounted(() => {
+  inbox.connect()
+  if (!inbox.conversations.length) void inbox.fetchConversations()
+})
+onBeforeUnmount(() => inbox.disconnect())
+
+const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 
 const mobileItems = computed(() => navItems.filter((n) => n.mobile))
 const title = computed(() => (route.meta.title as string | undefined) ?? '')
 const initial = computed(() => (auth.user?.displayName || auth.user?.username || '?').slice(0, 1).toUpperCase())
 
 async function onLogout() {
+  inbox.disconnect()
   await auth.logout()
   router.replace({ name: 'login' })
 }
@@ -40,6 +51,7 @@ async function onLogout() {
         >
           <el-icon :size="18"><component :is="n.icon" /></el-icon>
           <span>{{ n.title }}</span>
+          <span v-if="badge(n.name)" class="nav-badge">{{ badge(n.name) > 99 ? '99+' : badge(n.name) }}</span>
         </RouterLink>
       </nav>
       <div class="side-footer">
@@ -79,7 +91,9 @@ async function onLogout() {
         class="tab"
         active-class="is-active"
       >
-        <el-icon :size="22"><component :is="n.icon" /></el-icon>
+        <el-badge :value="badge(n.name)" :hidden="!badge(n.name)" :max="99" class="tab-badge">
+          <el-icon :size="22"><component :is="n.icon" /></el-icon>
+        </el-badge>
         <span>{{ n.title }}</span>
       </RouterLink>
     </nav>
@@ -150,6 +164,23 @@ async function onLogout() {
     background: var(--lc-latte);
     font-weight: 500;
   }
+}
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #d9534f;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.tab-badge :deep(.el-badge__content) {
+  border: 0;
 }
 
 .side-footer {
