@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: litty-coffee-db
+    environment:
+      POSTGRES_USER: litty
+      POSTGRES_PASSWORD: litty
+      POSTGRES_DB: litty
+    ports:
+      - "127.0.0.1:54330:5432"
+    volumes:
+      - litty-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litty"]
+      interval: 3s
+      retries: 20
+
+volumes:
+  litty-pg:

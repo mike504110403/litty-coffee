@@ -1,0 +1,65 @@
+// 咖啡色系主題：覆寫 Element Plus CSS 變數＋全域版面 token
+:root {
+  --lc-espresso: #3b2a20;
+  --lc-roast: #6b4a35;
+  --lc-caramel: #c8915a;
+  --lc-latte: #e9d8c4;
+  --lc-cream: #faf6f1;
+  --lc-surface: #ffffff;
+  --lc-text: #2b211b;
+  --lc-muted: #8a7a6e;
+  --lc-border: #eee4d9;
+  --lc-radius: 16px;
+  --lc-shadow: 0 1px 2px rgba(59, 42, 32, 0.04), 0 8px 24px rgba(59, 42, 32, 0.06);
+  --lc-sidebar-w: 232px;
+  --lc-tabbar-h: 64px;
+
+  --el-color-primary: #8b5e3c;
+  --el-color-primary-light-3: #ad8e77;
+  --el-color-primary-light-5: #c5af9e;
+  --el-color-primary-light-7: #dccfc5;
+  --el-color-primary-light-8: #e8dfd8;
+  --el-color-primary-light-9: #f3efeb;
+  --el-color-primary-dark-2: #6f4b30;
+  --el-border-radius-base: 10px;
+  --el-font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, 'PingFang TC', sans-serif;
+  --el-bg-color-page: var(--lc-cream);
+  --el-text-color-primary: var(--lc-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--lc-cream);
+  color: var(--lc-text);
+  font-family: var(--el-font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lc-brand-font {
+  font-family: 'Fraunces', Georgia, serif;
+  letter-spacing: -0.01em;
+}
+
+.lc-card {
+  background: var(--lc-surface);
+  border: 1px solid var(--lc-border);
+  border-radius: var(--lc-radius);
+  box-shadow: var(--lc-shadow);
+}
+
+.lc-page-title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.lc-page-sub {
+  margin: 0 0 20px;
+  color: var(--lc-muted);
+  font-size: 14px;
+}
