@@ -9,21 +9,25 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
+	"github.com/mike504110403/litty-coffee/backend/internal/crm"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
 
 type Server struct {
-	DB      *pgxpool.Pool
-	Auth    *auth.Service
-	Inbox   *inbox.Service
-	Hub     *realtime.Hub
-	Fake    *ig.Fake // 非 nil＝開發模擬模式
-	Auto    *automation.Engine
-	AIModel string
+	DB        *pgxpool.Pool
+	Auth      *auth.Service
+	Inbox     *inbox.Service
+	Hub       *realtime.Hub
+	Fake      *ig.Fake // 非 nil＝開發模擬模式
+	Auto      *automation.Engine
+	AIModel   string
+	CRM       *crm.Service
+	Analytics *analytics.Service
 
 	IGAppSecret   string
 	IGVerifyToken string
@@ -52,6 +56,7 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/auth/me", s.me)
 			s.inboxRoutes(r)
 			s.automationRoutes(r)
+			s.crmRoutes(r)
 			r.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
 			})

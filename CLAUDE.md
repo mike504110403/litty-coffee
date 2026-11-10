@@ -38,6 +38,14 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - AI：`ANTHROPIC_API_KEY`、`AI_MODEL`（預設 claude-opus-5-5）、`AI_EFFORT`（預設 low）；開啟 server-side refusal fallback（`fallbacks: default`）
 - 意圖寫進顧客訊息的 `messages.meta.intent`，分析頁用
 
+## 顧客與分析
+
+- 標籤 `tags`／`contact_tags`；顧客清單一次查詢帶出標籤（json_agg）與互動數
+- 分析 `GET /api/analytics/summary?days=N`：依店家時區（`TZ_STORE`，預設 Asia/Taipei；binary 內嵌 tzdata）切日；同時回前一個等長區間供漲跌
+- 回應時間口徑：顧客「開啟回合」（前一則不是顧客訊息）到店家第一則回覆；同回合連傳只算一次
+- 圖表色：自動＝`#2a78d6`、真人＝`#eb6834`（dataviz 參考色盤 slot 1/2，已跑 validator；咖啡色系配色 chroma 不足或紅綠色盲分不開，故不用）；單一系列一律 `#2a78d6`
+- App 目前只有淺色模式，圖表未做深色版
+
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
 - AI 真實呼叫尚未實測（目前無 API key）；沙盒可直接驗

@@ -16,6 +16,7 @@ const emit = defineEmits<{
   'load-older': []
   'set-handler': [h: 'bot' | 'human']
   'set-status': [s: 'open' | 'closed']
+  'open-contact': []
 }>()
 
 const scroller = ref<HTMLElement>()
@@ -123,8 +124,8 @@ const handler = computed({
   <div class="thread">
     <header class="t-head">
       <el-button class="back" text circle :icon="ArrowLeft" @click="emit('back')" />
-      <ContactAvatar :contact="conversation.contact" :size="38" />
-      <div class="who">
+      <ContactAvatar :contact="conversation.contact" :size="38" class="clickable" @click="emit('open-contact')" />
+      <div class="who clickable" title="顧客資料" @click="emit('open-contact')">
         <div class="name">{{ contactLabel(conversation.contact) }}</div>
         <div v-if="conversation.contact.username" class="handle">@{{ conversation.contact.username }}</div>
       </div>
@@ -215,6 +216,9 @@ const handler = computed({
   .back {
     display: none;
   }
+}
+.clickable {
+  cursor: pointer;
 }
 .who {
   flex: 1;

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ChatDotRound, MagicStick, Timer, Calendar } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { crmApi, type Summary } from '@/api/crm'
+import { formatCount, formatDuration, formatPercent } from '@/utils/format'
 
 const auth = useAuthStore()
 
@@ -12,13 +14,21 @@ const greeting = computed(() => {
   return '晚安'
 })
 
-// 第一片先放骨架數字；收件匣與分析上線後接 API
-const stats = [
-  { label: '今日新訊息', value: '—', icon: ChatDotRound, tone: 'caramel' },
-  { label: '自動回覆率', value: '—', icon: MagicStick, tone: 'roast' },
-  { label: '平均回應時間', value: '—', icon: Timer, tone: 'sage' },
-  { label: '待發排程', value: '—', icon: Calendar, tone: 'rose' },
-]
+const today = ref<Summary | null>(null)
+onMounted(async () => {
+  today.value = await crmApi.summary(1)
+})
+
+// 待發排程等排程功能上線後接
+const stats = computed(() => {
+  const c = today.value?.current
+  return [
+    { label: '今日顧客訊息', value: c ? formatCount(c.totals.inbound) : '—', icon: ChatDotRound, tone: 'caramel' },
+    { label: '今日自動回覆占比', value: formatPercent(c?.autoShare), icon: MagicStick, tone: 'roast' },
+    { label: '今日回應時間中位數', value: formatDuration(c?.response.medianSecs), icon: Timer, tone: 'sage' },
+    { label: '待發排程', value: '—', icon: Calendar, tone: 'rose' },
+  ]
+})
 
 const steps = [
   { title: '連結 IG 商家帳號', desc: '在「設定」授權 Instagram，開始接收私訊' },

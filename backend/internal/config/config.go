@@ -24,6 +24,8 @@ type Config struct {
 	AnthropicAPIKey string
 	AIModel         string
 	AIEffort        string
+
+	Timezone string // 店家時區（分析切日用）
 }
 
 func Load() (Config, error) {
@@ -42,6 +44,7 @@ func Load() (Config, error) {
 		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
 		AIModel:         env("AI_MODEL", "claude-opus-5-5"),
 		AIEffort:        env("AI_EFFORT", "low"),
+		Timezone:        env("TZ_STORE", "Asia/Taipei"),
 	}
 	if len(c.JWTSecret) < 16 {
 		return c, fmt.Errorf("JWT_SECRET must be at least 16 chars")

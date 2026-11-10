@@ -8,6 +8,7 @@ import { useInboxStore } from '@/stores/inbox'
 import ConversationList from './ConversationList.vue'
 import ChatThread from './ChatThread.vue'
 import SimulatorDialog from './SimulatorDialog.vue'
+import ContactDrawer from '@/components/ContactDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,7 @@ const routeId = computed(() => {
 
 watch(routeId, (id) => void store.open(id), { immediate: true })
 
+const contactId = ref<number | null>(null)
 const simulator = ref(false)
 const showSim = ref(false)
 
@@ -68,6 +70,7 @@ async function send(text: string) {
         @load-older="store.loadOlder(active.id)"
         @set-handler="(h) => store.patch(active!.id, { handler: h })"
         @set-status="(s) => store.patch(active!.id, { status: s })"
+        @open-contact="contactId = active!.contact.id"
       />
       <div v-else class="placeholder">
         <el-icon :size="48"><ChatLineRound /></el-icon>
@@ -77,6 +80,7 @@ async function send(text: string) {
     </section>
 
     <SimulatorDialog v-if="simulator" v-model="showSim" />
+    <ContactDrawer :contact-id="contactId" @close="contactId = null" />
   </div>
 </template>
 

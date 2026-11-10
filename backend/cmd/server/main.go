@@ -10,10 +10,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // 容器內沒有系統時區資料時也能載入店家時區
 
+	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
+	"github.com/mike504110403/litty-coffee/backend/internal/crm"
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
 	"github.com/mike504110403/litty-coffee/backend/internal/httpapi"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
@@ -63,6 +66,13 @@ func main() {
 	api.Auto = engine
 	api.AIModel = cfg.AIModel
 	api.Inbox.OnInbound = engine.OnInbound
+
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		log.Fatalf("TZ_STORE: %v", err)
+	}
+	api.CRM = &crm.Service{DB: pool}
+	api.Analytics = &analytics.Service{DB: pool, Loc: loc}
 	go api.Inbox.RunWorker(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,
