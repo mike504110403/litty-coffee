@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
+	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
 	"github.com/mike504110403/litty-coffee/backend/internal/httpapi"
@@ -52,6 +53,16 @@ func main() {
 	}
 	api.Inbox = inbox.NewService(pool, messenger, hub)
 	api.Inbox.DefaultToken = cfg.IGAccessToken
+	engine := &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: api.Inbox, Ctx: ctx}
+	if cfg.AnthropicAPIKey != "" {
+		engine.AI = automation.NewAI(cfg.AnthropicAPIKey, cfg.AIModel, cfg.AIEffort)
+		log.Printf("AI 自動回覆：%s（effort=%s）", cfg.AIModel, cfg.AIEffort)
+	} else {
+		log.Print("未設 ANTHROPIC_API_KEY：只跑關鍵字規則")
+	}
+	api.Auto = engine
+	api.AIModel = cfg.AIModel
+	api.Inbox.OnInbound = engine.OnInbound
 	go api.Inbox.RunWorker(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,

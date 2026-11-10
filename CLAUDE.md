@@ -28,12 +28,19 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 
 `.env` 設 `DEV_SIMULATOR=1`：送訊走假 sender（`internal/ig/fake.go`），後台收件匣出現「模擬訊息」按鈕（`POST /api/dev/simulate`），組出與真 webhook 同形的 payload 走同一條入庫路徑。
 
-- 測試：`TEST_DATABASE_URL=postgres://litty:litty@localhost:54330/litty_test?sslmode=disable go test ./...`（`litty_test` 庫需先建；未設時整合測試跳過）
+- 測試：`TEST_DATABASE_URL=postgres://litty:litty@localhost:54330/litty_test?sslmode=disable go test -p 1 ./...`（`litty_test` 庫需先建；`-p 1` 必要：各套件共用同一個測試庫會互相 TRUNCATE；未設時整合測試跳過）
 - webhook 公開路徑：`GET/POST /webhooks/instagram`（驗 `X-Hub-Signature-256`）；串真 IG 時需公開 HTTPS
 - 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）
 
+## 自動回覆
+
+- 流程：顧客訊息入庫 → 等合併秒數（設定頁可調）→ 只處理該對話最新一則 → handler=human 則跳過 → 關鍵字規則（priority 小的先）→ AI（`internal/automation/ai.go`，結構化輸出 reply/handoff＋intent）→ 送出或轉真人
+- AI：`ANTHROPIC_API_KEY`、`AI_MODEL`（預設 claude-opus-5-5）、`AI_EFFORT`（預設 low）；開啟 server-side refusal fallback（`fallbacks: default`）
+- 意圖寫進顧客訊息的 `messages.meta.intent`，分析頁用
+
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
+- AI 真實呼叫尚未實測（目前無 API key）；沙盒可直接驗
 - 收到的媒體 URL 會過期：目前只存 URL，需改為即時下載到自有儲存
 - 已讀、reaction、訊息收回等 webhook 事件尚未處理（worker 直接略過）
 - ig_accounts.access_token 目前由 env 兜底；設定頁做 OAuth 後改存 DB 並處理 60 天換發

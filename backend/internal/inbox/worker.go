@@ -92,3 +92,15 @@ ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &raw)
 	}
 	return false, nil
 }
+
+// ProcessPending 同步處理所有待辦事件，回傳處理筆數（測試與手動重播用）。
+func (s *Service) ProcessPending(ctx context.Context) (int, error) {
+	n := 0
+	for {
+		done, err := s.processOne(ctx)
+		if err != nil || done {
+			return n, err
+		}
+		n++
+	}
+}
