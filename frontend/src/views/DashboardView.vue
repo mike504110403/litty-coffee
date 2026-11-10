@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ChatDotRound, MagicStick, Timer, Calendar } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
+import { postsApi } from '@/api/posts'
 import { formatCount, formatDuration, formatPercent } from '@/utils/format'
 
 const auth = useAuthStore()
@@ -15,18 +16,18 @@ const greeting = computed(() => {
 })
 
 const today = ref<Summary | null>(null)
+const upcoming = ref<number | null>(null)
 onMounted(async () => {
-  today.value = await crmApi.summary(1)
+  ;[today.value, upcoming.value] = await Promise.all([crmApi.summary(1), postsApi.upcomingCount()])
 })
 
-// 待發排程等排程功能上線後接
 const stats = computed(() => {
   const c = today.value?.current
   return [
     { label: '今日顧客訊息', value: c ? formatCount(c.totals.inbound) : '—', icon: ChatDotRound, tone: 'caramel' },
     { label: '今日自動回覆占比', value: formatPercent(c?.autoShare), icon: MagicStick, tone: 'roast' },
     { label: '今日回應時間中位數', value: formatDuration(c?.response.medianSecs), icon: Timer, tone: 'sage' },
-    { label: '待發排程', value: '—', icon: Calendar, tone: 'rose' },
+    { label: '待發排程', value: upcoming.value == null ? '—' : String(upcoming.value), icon: Calendar, tone: 'rose' },
   ]
 })
 

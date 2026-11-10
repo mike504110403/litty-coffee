@@ -164,3 +164,53 @@ func (a *AI) Decide(ctx context.Context, st Settings, kb []Knowledge, turns []Tu
 	}
 	return d, nil
 }
+
+// Caption 依店家資料與一句說明寫 IG 貼文文案。
+func (a *AI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, kind string) (string, error) {
+	var b strings.Builder
+	b.WriteString(`你在替一間咖啡廳寫 Instagram 貼文文案。
+
+## 店家語氣
+`)
+	b.WriteString(st.Persona)
+	b.WriteString(`
+
+## 寫作要求
+- 繁體中文，口語、溫暖，像店家自己寫的，不要像廣告稿。
+- 開頭一句要能吸引人停下來；全文 3～6 行，適度換行與 1～3 個 emoji。
+- 結尾放 5～10 個相關 hashtag（中英文皆可），不要超過 15 個。
+- 只能使用下方店家資料裡的事實（價格、時間、品項），資料沒寫的不要編。
+- 只輸出文案本身，不要任何說明或引號。
+
+## 店家資料
+`)
+	for _, k := range kb {
+		if k.Enabled && strings.TrimSpace(k.Content) != "" {
+			fmt.Fprintf(&b, "\n### %s\n%s\n", k.Title, strings.TrimSpace(k.Content))
+		}
+	}
+	kindLabel := map[string]string{"image": "單張圖片貼文", "carousel": "多張輪播貼文", "reel": "Reels 短影音", "story": "限時動態"}[kind]
+	resp, err := a.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
+		Model:     anthropic.Model(a.Model),
+		MaxTokens: 4000,
+		System:    []anthropic.BetaTextBlockParam{{Text: b.String()}},
+		Messages: []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(
+			fmt.Sprintf("貼文類型：%s\n這篇想說的是：%s", kindLabel, strings.TrimSpace(brief))))},
+		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffort(a.Effort)},
+		Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
+		Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp.StopReason == anthropic.BetaStopReasonRefusal {
+		return "", ErrRefused
+	}
+	var out strings.Builder
+	for _, block := range resp.Content {
+		if tb, ok := block.AsAny().(anthropic.BetaTextBlock); ok {
+			out.WriteString(tb.Text)
+		}
+	}
+	return strings.TrimSpace(out.String()), nil
+}

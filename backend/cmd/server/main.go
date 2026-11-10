@@ -21,6 +21,8 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/httpapi"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
+	"github.com/mike504110403/litty-coffee/backend/internal/media"
+	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
 
@@ -58,7 +60,9 @@ func main() {
 	api.Inbox.DefaultToken = cfg.IGAccessToken
 	engine := &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: api.Inbox, Ctx: ctx}
 	if cfg.AnthropicAPIKey != "" {
-		engine.AI = automation.NewAI(cfg.AnthropicAPIKey, cfg.AIModel, cfg.AIEffort)
+		ai := automation.NewAI(cfg.AnthropicAPIKey, cfg.AIModel, cfg.AIEffort)
+		engine.AI = ai
+		api.CaptionAI = ai
 		log.Printf("AI 自動回覆：%s（effort=%s）", cfg.AIModel, cfg.AIEffort)
 	} else {
 		log.Print("未設 ANTHROPIC_API_KEY：只跑關鍵字規則")
@@ -73,6 +77,15 @@ func main() {
 	}
 	api.CRM = &crm.Service{DB: pool}
 	api.Analytics = &analytics.Service{DB: pool, Loc: loc}
+
+	api.Media = &media.Store{DB: pool, Dir: cfg.MediaDir, PublicBase: cfg.PublicBaseURL}
+	api.Posts = posts.NewService(pool, api.Media)
+	var publisher ig.Publisher = ig.NewClient(cfg.IGAPIBase)
+	pubToken := cfg.IGAccessToken
+	if cfg.DevSimulator {
+		publisher, pubToken = ig.NewFakePublisher(), "dev-token"
+	}
+	go (&posts.Scheduler{Svc: api.Posts, IG: publisher, Token: pubToken}).Run(ctx)
 	go api.Inbox.RunWorker(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,

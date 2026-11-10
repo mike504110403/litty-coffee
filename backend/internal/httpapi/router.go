@@ -15,6 +15,8 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
+	"github.com/mike504110403/litty-coffee/backend/internal/media"
+	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
 
@@ -28,6 +30,9 @@ type Server struct {
 	AIModel   string
 	CRM       *crm.Service
 	Analytics *analytics.Service
+	Media     *media.Store
+	Posts     *posts.Service
+	CaptionAI *automation.AI // nil＝沒設 key
 
 	IGAppSecret   string
 	IGVerifyToken string
@@ -47,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 
 	r.Get("/webhooks/instagram", s.webhookVerify)
 	r.Post("/webhooks/instagram", s.webhookReceive)
+	r.Handle("/media/*", s.Media.Handler()) // 公開：IG 發佈時從這裡抓檔
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", s.login)
@@ -57,6 +63,7 @@ func (s *Server) Routes() http.Handler {
 			s.inboxRoutes(r)
 			s.automationRoutes(r)
 			s.crmRoutes(r)
+			s.postRoutes(r)
 			r.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
 			})

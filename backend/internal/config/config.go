@@ -25,6 +25,9 @@ type Config struct {
 	AIModel         string
 	AIEffort        string
 
+	MediaDir      string // 上傳檔存放目錄
+	PublicBaseURL string // 對外網址（IG 抓媒體用），例：https://litty.example.com
+
 	Timezone string // 店家時區（分析切日用）
 }
 
@@ -45,6 +48,8 @@ func Load() (Config, error) {
 		AIModel:         env("AI_MODEL", "claude-opus-5-5"),
 		AIEffort:        env("AI_EFFORT", "low"),
 		Timezone:        env("TZ_STORE", "Asia/Taipei"),
+		MediaDir:        env("MEDIA_DIR", "./data/media"),
+		PublicBaseURL:   env("PUBLIC_BASE_URL", "http://localhost:8790"),
 	}
 	if len(c.JWTSecret) < 16 {
 		return c, fmt.Errorf("JWT_SECRET must be at least 16 chars")

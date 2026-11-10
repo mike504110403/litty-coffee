@@ -11,6 +11,7 @@ export default defineConfig({
     port: 5190,
     proxy: {
       '/api': 'http://localhost:8790',
+      '/media': 'http://localhost:8790',
     },
   },
 })
