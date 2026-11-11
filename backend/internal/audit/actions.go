@@ -47,6 +47,9 @@ var Routes = []Route{
 	{"PUT", "/automation/knowledge/{id}", "automation.update_knowledge", "修改知識庫", "knowledge", false},
 	{"DELETE", "/automation/knowledge/{id}", "automation.delete_knowledge", "刪除知識庫", "knowledge", false},
 	{"POST", "/automation/test", "automation.sandbox", "自動回覆沙盒測試", "", false},
+	{"POST", "/automation/distill", "automation.distill", "蒸餾自動回覆", "", false},
+	{"POST", "/automation/distill/suggestions/{id}/accept", "automation.distill_accept", "採用蒸餾建議", "distill_suggestion", false},
+	{"POST", "/automation/distill/suggestions/{id}/dismiss", "automation.distill_dismiss", "略過蒸餾建議", "distill_suggestion", false},
 
 	{"PATCH", "/contacts/{id}", "contact.update", "修改顧客（備註／標籤／標記）", "contact", false},
 	{"POST", "/tags", "tag.create", "新增標籤", "", false},
@@ -141,17 +144,18 @@ func LookupRoute(method, pattern string) (Route, bool) {
 }
 
 var targetLabels = map[string]string{
-	"conversation": "對話",
-	"message":      "訊息",
-	"review":       "待改進問答",
-	"rule":         "關鍵字規則",
-	"knowledge":    "知識庫",
-	"contact":      "顧客",
-	"tag":          "標籤",
-	"post":         "貼文",
-	"connection":   "IG 連線",
-	"ig_account":   "IG 帳號",
-	"admin":        "管理員",
+	"conversation":       "對話",
+	"message":            "訊息",
+	"review":             "待改進問答",
+	"rule":               "關鍵字規則",
+	"knowledge":          "知識庫",
+	"distill_suggestion": "蒸餾建議",
+	"contact":            "顧客",
+	"tag":                "標籤",
+	"post":               "貼文",
+	"connection":         "IG 連線",
+	"ig_account":         "IG 帳號",
+	"admin":              "管理員",
 }
 
 // TargetLabel 回「種類 #id」的中文說明；沒有目標回空字串。

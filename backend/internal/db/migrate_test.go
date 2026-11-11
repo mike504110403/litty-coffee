@@ -459,3 +459,47 @@ func TestMigration16KeepsExistingSuperAdminName(t *testing.T) {
 		t.Fatal("down: 超管應停用、非超管不動")
 	}
 }
+
+// 00017：蒸餾表；既有自動回覆設定保留且每週蒸餾預設關；同帳號只能一筆 running；帳號刪除時一併刪；Down 再 Up 可重跑。
+func TestMigration17DistillPreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 16); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acc-a'), ('acc-b')`)
+	mustExec(t, d, `DELETE FROM automation_settings`)
+	mustExec(t, d, `INSERT INTO automation_settings (ig_account_id, persona, digest_time, auto_reply_enabled) VALUES (NULL, '範本', '08:30', true), (1, 'A 店', '10:00', false)`)
+	if err := goose.UpToContext(ctx, d, "migrations", 17); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM automation_settings WHERE NOT distill_weekly`) != 2 ||
+		strOf(t, d, `SELECT persona || digest_time || auto_reply_enabled::text FROM automation_settings WHERE ig_account_id = 1`) != "A 店10:00false" {
+		t.Fatal("既有設定應保留、每週蒸餾預設關")
+	}
+	mustExec(t, d, `INSERT INTO distill_runs (ig_account_id, days) VALUES (1, 30), (2, 7)`)
+	if _, err := d.Exec(`INSERT INTO distill_runs (ig_account_id, days) VALUES (1, 30)`); err == nil {
+		t.Fatal("同帳號只能一筆 running")
+	}
+	if _, err := d.Exec(`INSERT INTO distill_runs (ig_account_id, days, status) VALUES (1, 14, 'done')`); err == nil {
+		t.Fatal("days 只收 7／30／90")
+	}
+	mustExec(t, d, `INSERT INTO distill_suggestions (run_id, ig_account_id, payload) VALUES (1, 1, '{"type":"rule"}'), (2, 2, '{"type":"knowledge"}')`)
+	if _, err := d.Exec(`UPDATE distill_suggestions SET status = 'superseded'`); err == nil {
+		t.Fatal("status 只收 pending／accepted／dismissed")
+	}
+	mustExec(t, d, `DELETE FROM ig_accounts WHERE ig_user_id = 'acc-b'`)
+	if intOf(t, d, `SELECT count(*) FROM distill_runs`) != 1 || intOf(t, d, `SELECT count(*) FROM distill_suggestions`) != 1 {
+		t.Fatal("帳號刪除時蒸餾紀錄一併刪")
+	}
+	if err := goose.DownToContext(ctx, d, "migrations", 16); err != nil {
+		t.Fatal(err)
+	}
+	if strOf(t, d, `SELECT persona || digest_time FROM automation_settings WHERE ig_account_id = 1`) != "A 店10:00" ||
+		intOf(t, d, `SELECT count(*) FROM automation_settings`) != 2 {
+		t.Fatal("down: 設定應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}

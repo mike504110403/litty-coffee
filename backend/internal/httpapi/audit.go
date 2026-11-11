@@ -187,6 +187,8 @@ func (s *Server) auditAccount(ctx context.Context, rt audit.Route, targetID stri
 		q = `SELECT ig_account_id FROM auto_rules WHERE id = $1`
 	case "knowledge":
 		q = `SELECT ig_account_id FROM knowledge_items WHERE id = $1`
+	case "distill_suggestion":
+		q = `SELECT ig_account_id FROM distill_suggestions WHERE id = $1`
 	}
 	if q != "" && id > 0 {
 		var acc *int64

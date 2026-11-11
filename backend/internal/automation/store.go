@@ -54,6 +54,8 @@ type Settings struct {
 	AutoReplyEnabled bool `json:"autoReplyEnabled"`
 	// DigestTime 是每日摘要的產生時間（店家時區 HH:MM），產生前一天的摘要
 	DigestTime string `json:"digestTime"`
+	// DistillWeekly＝每週一 09:00（店家時區）自動蒸餾近 7 天對話成建議（只產建議，不會自動生效）
+	DistillWeekly bool `json:"distillWeekly"`
 	// Throttled 不存 DB：引擎在顧客降頻中時設成 true，請 AI 回得簡短、委婉
 	Throttled bool `json:"-"`
 }
@@ -89,9 +91,9 @@ func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
 	}
 	tag, err := tx.Exec(ctx, `
 INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, ig_account_id)
+  auto_reply_enabled, digest_time, distill_weekly, ig_account_id)
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, $1
+  auto_reply_enabled, digest_time, distill_weekly, $1
 FROM automation_settings WHERE ig_account_id IS NULL
 ON CONFLICT (ig_account_id) DO NOTHING`, accountID)
 	if err != nil {
@@ -289,10 +291,10 @@ func (s *Store) GetSettings(ctx context.Context, accountID int64) (Settings, err
 	}
 	err := s.DB.QueryRow(ctx, `
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time
+  auto_reply_enabled, digest_time, distill_weekly
 FROM automation_settings WHERE ig_account_id=$1`,
 		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration,
-		&st.AutoReplyEnabled, &st.DigestTime)
+		&st.AutoReplyEnabled, &st.DigestTime, &st.DistillWeekly)
 	return st, err
 }
 
@@ -319,8 +321,8 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	st.Persona, st.HandoffMessage = strings.TrimSpace(st.Persona), strings.TrimSpace(st.HandoffMessage)
 	_, err := s.DB.Exec(ctx, `
 UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4,
-  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, updated_at=now() WHERE ig_account_id=$5`,
+  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, distill_weekly=$11, updated_at=now() WHERE ig_account_id=$5`,
 		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration,
-		st.AutoReplyEnabled, st.DigestTime)
+		st.AutoReplyEnabled, st.DigestTime, st.DistillWeekly)
 	return st, err
 }

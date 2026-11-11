@@ -48,6 +48,8 @@ type Server struct {
 	// SuggestAI 非 nil 時「AI 建議回覆」改用它（測試換假 AI）；nil＝沿用 CaptionAI
 	SuggestAI automation.Suggester
 	suggestRL suggestLimiter // 建議回覆：每位管理員每分鐘上限
+	// DistillAI 非 nil 時「蒸餾自動回覆」改用它（測試換假 AI）；nil＝沿用 CaptionAI
+	DistillAI automation.DistillAI
 	// 總覽：系統狀態、每日摘要，與它們的即時通知
 	Monitor *monitor.Monitor // 系統狀態（總覽頁）；nil＝503
 	Digests *digest.Service  // 每日摘要；nil＝503

@@ -161,6 +161,13 @@ func main() {
 	go api.Monitor.Run(ctx)
 	api.Digests = &digest.Service{DB: pool, Analytics: api.Analytics, Loc: loc, AI: liveAI, Calls: aiCalls, Hub: api.SysHub}
 	go api.Digests.Run(ctx)
+	// 每週自動蒸餾（每帳號在自動回覆設定開啟才跑；週一 09:00 店家時區，近 7 天）：只產建議，完成推 distill.ready
+	weeklyDistill := &automation.Distiller{Store: engine.Store, AI: liveAI, Calls: aiCalls, Loc: loc,
+		OnReady: func(run automation.DistillRun) {
+			api.SysHub.Publish(realtime.Event{Type: "distill.ready", AccountID: run.IGAccountID,
+				Data: map[string]any{"igAccountId": run.IGAccountID, "runId": run.ID, "suggestionCount": run.SuggestionCount}})
+		}}
+	go weeklyDistill.RunWeekly(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return ctx }} // 關機時一併結束 SSE 長連線

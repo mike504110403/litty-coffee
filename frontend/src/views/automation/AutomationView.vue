@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { automationApi } from '@/api/automation'
+import { automationApi, distillApi } from '@/api/automation'
 import RulesPanel from './RulesPanel.vue'
 import KnowledgePanel from './KnowledgePanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SandboxPanel from './SandboxPanel.vue'
 import ReviewsPanel from './ReviewsPanel.vue'
+import DistillPanel from './DistillPanel.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import PillTabs from '@/components/PillTabs.vue'
@@ -22,15 +23,22 @@ const allTabs = [
   { key: 'ai', label: 'AI 設定' },
   { key: 'sandbox', label: '試答沙盒' },
   { key: 'reviews', label: '待改進' },
+  { key: 'distill', label: '蒸餾建議' },
 ] as const
 type TabKey = (typeof allTabs)[number]['key']
 
 // 寬螢幕：AI 設定（左）與試答沙盒（右）併成同一分頁，邊改邊試；窄螢幕仍是兩個分頁
 const wide = useMediaQuery('(min-width: 1280px)')
+// 手機：六個分頁用短名稱才排得下
+const narrow = useMediaQuery('(max-width: 768px)')
+const shortLabels: Partial<Record<TabKey, string>> = { rules: '規則', knowledge: '知識庫', ai: 'AI', sandbox: '試答', distill: '蒸餾' }
+// 有待審核的蒸餾建議時，分頁名稱帶數字
+const distillPending = ref(0)
 const tabs = computed(() =>
-  wide.value
+  (wide.value
     ? allTabs.filter((t) => t.key !== 'sandbox').map((t) => (t.key === 'ai' ? { ...t, label: 'AI 設定與試答' } : t))
-    : allTabs,
+    : allTabs.map((t) => (narrow.value && shortLabels[t.key] ? { ...t, label: shortLabels[t.key]! } : t))
+  ).map((t) => (t.key === 'distill' && distillPending.value ? { ...t, label: `${t.label} ${distillPending.value}` } : t)),
 )
 
 const tab = computed<TabKey>({
@@ -49,6 +57,7 @@ const tabHelp: Record<TabKey, string> = {
   ai: '調整 AI 的角色語氣、轉真人與降頻規則；右側（寬螢幕）可立刻試答。',
   sandbox: '用目前的規則與知識庫試回覆，不會送給任何人。',
   reviews: '「回答有誤」是同事在收件匣標記的自動回覆；「AI 沒把握」是 AI 轉真人或拒答時自動記下的問題。補好知識庫或規則後標為已處理。',
+  distill: 'AI 從近期對話整理出的規則與知識庫建議。只有按「採用」的才會生效；修改既有項目時會標出前後差異。',
 }
 
 const status = ref<{ aiConfigured: boolean; model: string } | null>(null)
@@ -56,7 +65,22 @@ const status = ref<{ aiConfigured: boolean; model: string } | null>(null)
 // 每個 IG 帳號有自己的規則、知識庫、AI 設定；沙盒也用選的帳號
 const accounts = useAccountsStore()
 const accountId = ref<number | null>(null)
-watch(accountId, (id) => accounts.remember(id))
+watch(accountId, (id) => {
+  accounts.remember(id)
+  void loadPending()
+})
+
+async function loadPending() {
+  const id = accountId.value
+  if (id == null) return
+  try {
+    const list = await distillApi.suggestions(id, 'pending')
+    if (id === accountId.value) distillPending.value = list.length
+  } catch {
+    distillPending.value = 0
+  }
+}
+const goDistill = () => (tab.value = 'distill')
 
 onMounted(async () => {
   await accounts.ensure()
@@ -87,8 +111,20 @@ onMounted(async () => {
 
     <el-empty v-if="accounts.loaded && !accounts.list.length" description="還沒有 IG 帳號：請先到「設定」連結" />
     <template v-else-if="accountId != null">
-      <RulesPanel v-if="tab === 'rules'" :key="`r${accountId}`" :account-id="accountId" />
-      <KnowledgePanel v-else-if="tab === 'knowledge'" :key="`k${accountId}`" :account-id="accountId" />
+      <RulesPanel
+        v-if="tab === 'rules'"
+        :key="`r${accountId}`"
+        :account-id="accountId"
+        :distill-pending="distillPending"
+        @go-distill="goDistill"
+      />
+      <KnowledgePanel
+        v-else-if="tab === 'knowledge'"
+        :key="`k${accountId}`"
+        :account-id="accountId"
+        :distill-pending="distillPending"
+        @go-distill="goDistill"
+      />
       <div v-else-if="tab === 'ai'" :class="{ 'ai-split': wide }">
         <SettingsPanel :key="`s${accountId}`" :account-id="accountId" :ai-configured="!!status?.aiConfigured" />
         <SandboxPanel
@@ -103,6 +139,13 @@ onMounted(async () => {
         :key="`v${accountId}`"
         :account-id="accountId"
         @go-knowledge="tab = 'knowledge'"
+      />
+      <DistillPanel
+        v-else-if="tab === 'distill'"
+        :key="`d${accountId}`"
+        :account-id="accountId"
+        :ai-configured="!!status?.aiConfigured"
+        @changed="(n) => (distillPending = n)"
       />
       <SandboxPanel v-else :key="`t${accountId}`" :account-id="accountId" :ai-configured="!!status?.aiConfigured" />
     </template>

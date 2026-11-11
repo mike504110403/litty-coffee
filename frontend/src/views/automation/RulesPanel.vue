@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import HelpTip from '@/components/HelpTip.vue'
+import DistillHint from './DistillHint.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Promotion, User } from '@element-plus/icons-vue'
@@ -8,7 +9,8 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { shortTime } from '@/utils/time'
 
 // 編輯的是這個 IG 帳號的資料（父層切換帳號時以 key 重建本元件）
-const props = defineProps<{ accountId: number }>()
+const props = defineProps<{ accountId: number; distillPending?: number }>()
+const emit = defineEmits<{ 'go-distill': [] }>()
 
 const isMobile = useIsMobile()
 const rules = ref<Rule[]>([])
@@ -95,7 +97,10 @@ function useExample(e: (typeof examples)[number]) {
   <div>
     <div class="bar">
       <span class="count">{{ rules.length }} 條規則</span>
-      <el-button type="primary" :icon="Plus" @click="openEditor()">新增規則</el-button>
+      <div class="bar-right">
+        <DistillHint :pending="distillPending ?? 0" @go="emit('go-distill')" />
+        <el-button type="primary" :icon="Plus" @click="openEditor()">新增規則</el-button>
+      </div>
     </div>
 
     <div v-loading="loading" class="grid">
@@ -127,7 +132,7 @@ function useExample(e: (typeof examples)[number]) {
       </div>
 
       <div v-if="!loading && !rules.length" class="empty lc-card">
-        <p>還沒有規則。從範例開始：</p>
+        <p>還沒有規則。從範例開始，或<a class="link" @click="emit('go-distill')">從對話蒸餾</a>：</p>
         <div class="examples">
           <button v-for="e in examples" :key="e.name" class="example" @click="useExample(e)">
             <strong>{{ e.name }}</strong>
@@ -204,6 +209,16 @@ function useExample(e: (typeof examples)[number]) {
 </template>
 
 <style scoped lang="scss">
+.bar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.link {
+  color: var(--el-color-primary);
+  cursor: pointer;
+  margin: 0 2px;
+}
 .bar {
   display: flex;
   justify-content: space-between;

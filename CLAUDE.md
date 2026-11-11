@@ -135,6 +135,14 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 每日摘要：`internal/digest`，每帳號在 `automation_settings.digest_time`（預設 09:00，`TZ_STORE`）整理前一天；重要度排序見 `digest/score.go`；AI 摘要只送統計與每則 ≤60 字節錄（輸入 ≤2400 字）；`GET /api/digests/latest`、`POST /api/digests/generate`
 - AI 建議回覆：`POST /api/conversations/{id}/suggest`（inbox 權限、依帳號範圍、每人每分鐘 10 次）；只把草稿放進輸入框、絕不自動送出；顧客訊息以 `<conversation>` 資料區塊包裝防注入；操作紀錄不記草稿；呼叫計入 Claude 狀態
 
+## 蒸餾建議（從對話歸納規則／知識庫）
+
+- `internal/automation/distill.go`＋`httpapi/distill.go`，migration 00017（`distill_runs`、`distill_suggestions`）；自動回覆頁「蒸餾建議」分頁，`automation` 權限、依帳號範圍
+- 素材：近 N 天的「顧客問→真人答」、回答有誤、AI 沒把握＋意圖分布；排除黑名單、去顧客名稱、`MaskPII` 遮 Email／長數字；總長 ≤12000 字
+- 防捏造：事實只能取自店員回答／說明或既有知識庫；缺資料給「（請填寫）」骨架＋`needsInput`，採用時必須補完；update 只能指向同帳號既有項目（`FinishDistill` 程式端再擋）
+- 建議只在店長「採用」後才寫進規則／知識庫；新一批完成時舊的待審自動標為略過；每帳號冷卻 10 分鐘（成功與失敗都算）
+- 每週自動蒸餾：`automation_settings.distill_weekly`（預設關），週一 09:00（`TZ_STORE`）跑近 7 天，完成推 `distill.ready`
+
 ## AI 防提示注入（所有 Claude 呼叫共用）
 
 - 規則本體：`backend/internal/automation/prompts/security.md`（go:embed）；所有系統提示一律 `WithGuard(...)`（規則排最前面），`guard_test.go` 會靜態掃描整個套件，漏掉就測試失敗

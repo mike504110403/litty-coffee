@@ -108,6 +108,13 @@ export interface Digest {
   }
 }
 
+// distill.ready：每週自動蒸餾完成（有自動回覆權限、看得到該帳號者）
+export interface DistillReady {
+  igAccountId: number
+  runId: number
+  suggestionCount: number
+}
+
 export interface DigestReady {
   igAccountId: number
   date: string

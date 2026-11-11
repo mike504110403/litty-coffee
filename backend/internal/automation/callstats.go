@@ -8,7 +8,7 @@ import (
 
 // CallRecord 是一次真的打到 Claude API 的呼叫結果（系統狀態面板用）。
 type CallRecord struct {
-	Kind       string    `json:"kind"` // reply（自動回覆／沙盒）| digest（每日摘要）| suggest（收件匣 AI 建議回覆）
+	Kind       string    `json:"kind"` // reply（自動回覆／沙盒）| digest（每日摘要）| suggest（收件匣 AI 建議回覆）| distill（蒸餾自動回覆建議）
 	At         time.Time `json:"at"`
 	OK         bool      `json:"ok"`
 	Error      string    `json:"error,omitempty"`

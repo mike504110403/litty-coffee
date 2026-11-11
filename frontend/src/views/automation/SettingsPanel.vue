@@ -114,6 +114,16 @@ async function save() {
           class="digest-time"
         />
       </el-form-item>
+      <h3 class="section">蒸餾建議</h3>
+      <el-form-item>
+        <div class="switch-row">
+          <div class="label">
+            每週自動蒸餾
+            <HelpTip text="每週一 09:00（店家時區）把近 7 天的對話整理成規則與知識庫建議，完成時通知；建議要在「蒸餾建議」分頁採用後才生效。" />
+          </div>
+          <el-switch v-model="form.distillWeekly" :disabled="!aiConfigured && !form.distillWeekly" />
+        </div>
+      </el-form-item>
       <el-button type="primary" native-type="submit" :loading="saving">儲存設定</el-button>
     </el-form>
   </div>

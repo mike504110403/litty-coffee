@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useInboxStore } from '@/stores/inbox'
 import { useSystemStore } from '@/stores/system'
 import { useAccountsStore } from '@/stores/accounts'
-import type { DigestReady, SystemAlert } from '@/api/system'
+import type { DigestReady, DistillReady, SystemAlert } from '@/api/system'
 import UserMenu from '@/components/UserMenu.vue'
 
 const route = useRoute()
@@ -48,6 +48,7 @@ const system = useSystemStore()
 const accountsStore = useAccountsStore()
 let offAlert: (() => void) | null = null
 let offDigest: (() => void) | null = null
+let offDistill: (() => void) | null = null
 function notifyAlert(a: SystemAlert) {
   ElNotification({
     title: a.recovered ? `已恢復：${a.title}` : `系統異常：${a.title}`,
@@ -68,17 +69,33 @@ function notifyDigest(d: DigestReady) {
     onClick: () => void router.push({ name: 'dashboard' }),
   })
 }
+function notifyDistill(d: DistillReady) {
+  if (!d.suggestionCount) return
+  ElNotification({
+    title: '每週蒸餾完成',
+    message: `${accountsStore.label(d.igAccountId)} · ${d.suggestionCount} 筆建議待審核`,
+    type: 'info',
+    duration: 8000,
+    position: 'bottom-right',
+    onClick: () => {
+      accountsStore.remember(d.igAccountId)
+      void router.push({ name: 'automation', query: { tab: 'distill' } })
+    },
+  })
+}
 onMounted(() => {
   const wantsAlert = auth.can('automation')
   if (!wantsAlert && !auth.can('analytics')) return
   void accountsStore.ensure()
   system.connect()
   if (wantsAlert) offAlert = system.onAlert(notifyAlert)
+  if (wantsAlert) offDistill = system.onDistill(notifyDistill)
   if (auth.can('analytics')) offDigest = system.onDigest(notifyDigest)
 })
 onBeforeUnmount(() => {
   offAlert?.()
   offDigest?.()
+  offDistill?.()
   system.disconnect()
 })
 
@@ -99,7 +116,7 @@ const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 
 const visibleItems = computed(() => navItems.filter((n) => auth.canAny(n.perm)))
 const mobileItems = computed(() => visibleItems.value.filter((n) => n.mobile))
-// 手機沒放進底部 tab bar 的項目（顧客、設定、管理員），從頂欄選單進入
+// 手機沒放進底部 tab bar 的項目（設定、管理員），從頂欄選單進入
 const topItems = computed(() => visibleItems.value.filter((n) => !n.mobile))
 const title = computed(() => (route.meta.title as string | undefined) ?? '')
 </script>

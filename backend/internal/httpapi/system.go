@@ -67,6 +67,7 @@ var systemStreamPing = 25 * time.Second
 // systemEventVisible 決定某位登入者收不收得到系統事件：
 //   - system.alert：超管、店長、或有自動回覆權限者（Can 已涵蓋超管與店長）；帳號事件還要看得到該帳號（全系統事件 AccountID=0 皆可收）
 //   - digest.ready：有分析權限、且看得到該帳號
+//   - distill.ready（每週自動蒸餾完成）：有自動回覆權限、且看得到該帳號
 func systemEventVisible(u auth.User, e realtime.Event) bool {
 	switch e.Type {
 	case "system.alert":
@@ -76,6 +77,8 @@ func systemEventVisible(u auth.User, e realtime.Event) bool {
 		return e.AccountID == 0 || u.CanSeeAccount(e.AccountID)
 	case "digest.ready":
 		return u.Can(auth.PermAnalytics) && e.AccountID != 0 && u.CanSeeAccount(e.AccountID)
+	case "distill.ready":
+		return u.Can(auth.PermAutomation) && e.AccountID != 0 && u.CanSeeAccount(e.AccountID)
 	}
 	return false
 }

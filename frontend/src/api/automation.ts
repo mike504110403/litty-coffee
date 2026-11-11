@@ -34,6 +34,7 @@ export interface AutoSettings {
   aiModeration: boolean // AI 判斷騷擾／惡意，是就自動列入黑名單
   autoReplyEnabled: boolean // 自動回覆總開關：關閉＝只收不回（不跑規則、AI、轉真人通知）
   digestTime: string // 每日摘要產生時間（店家時區 HH:MM）
+  distillWeekly: boolean // 每週一 09:00 自動蒸餾近 7 天對話成建議（不會自動生效）
 }
 
 export interface AIDecision {
@@ -106,4 +107,91 @@ export const automationApi = {
         { timeout: 60000, params: { account } },
       )
       .then((r) => r.data),
+}
+
+// ---- 蒸餾：從對話整理「建議的」規則／知識庫，店家審核後才生效 ----
+
+export type DistillDays = 7 | 30 | 90
+
+export interface DistillRuleDraft {
+  name: string
+  keywords: string[]
+  matchType: MatchType
+  reply: string
+  handoff: boolean
+}
+
+export interface DistillKnowledgeDraft {
+  title: string
+  content: string
+}
+
+export interface DistillSuggestion {
+  type: 'rule' | 'knowledge'
+  action: 'create' | 'update'
+  targetId: number
+  rule?: DistillRuleDraft
+  knowledge?: DistillKnowledgeDraft
+  needsInput: boolean
+  reason: string
+  evidence: string[]
+  confidence: 'high' | 'medium' | 'low'
+  beforeRule?: DistillRuleDraft
+  beforeKnowledge?: DistillKnowledgeDraft
+  edited?: boolean
+}
+
+export interface DistillItem {
+  id: number
+  runId: number
+  igAccountId: number
+  status: 'pending' | 'accepted' | 'dismissed'
+  suggestion: DistillSuggestion
+  resultId: number | null
+  decidedBy: string
+  decidedAt: string | null
+  createdAt: string
+}
+
+export interface DistillRun {
+  id: number
+  igAccountId: number
+  days: DistillDays
+  trigger: 'manual' | 'weekly'
+  status: 'running' | 'done' | 'failed' | 'empty'
+  error: string
+  pairCount: number
+  reviewCount: number
+  inputChars: number
+  suggestionCount: number
+  createdBy: string
+  createdAt: string
+  finishedAt: string | null
+}
+
+export interface DistillEdit {
+  rule?: DistillRuleDraft
+  knowledge?: DistillKnowledgeDraft
+}
+
+export const confidenceLabels: Record<DistillSuggestion['confidence'], string> = {
+  high: '把握高',
+  medium: '把握中',
+  low: '把握低',
+}
+
+export const distillApi = {
+  // 同步跑一次（最多約 2 分鐘）
+  run: (account: number, days: DistillDays) =>
+    http
+      .post<{ run: DistillRun }>('/automation/distill', null, { params: { account, days }, timeout: 150000 })
+      .then((r) => r.data.run),
+  runs: (account: number) => http.get<DistillRun[]>('/automation/distill/runs', acc(account)).then((r) => r.data),
+  suggestions: (account: number, status: DistillItem['status'] | '' = 'pending') =>
+    http
+      .get<DistillItem[]>('/automation/distill/suggestions', { params: { account, status } })
+      .then((r) => r.data),
+  accept: (id: number, edit?: DistillEdit) =>
+    http.post<DistillItem>(`/automation/distill/suggestions/${id}/accept`, edit ?? {}).then((r) => r.data),
+  dismiss: (id: number) => http.post<DistillItem>(`/automation/distill/suggestions/${id}/dismiss`).then((r) => r.data),
 }

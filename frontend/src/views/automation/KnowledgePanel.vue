@@ -3,9 +3,11 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import { automationApi, type Knowledge } from '@/api/automation'
+import DistillHint from './DistillHint.vue'
 
 // 編輯的是這個 IG 帳號的資料（父層切換帳號時以 key 重建本元件）
-const props = defineProps<{ accountId: number }>()
+const props = defineProps<{ accountId: number; distillPending?: number }>()
+const emit = defineEmits<{ 'go-distill': [] }>()
 
 const items = ref<Knowledge[]>([])
 const loading = ref(true)
@@ -66,6 +68,10 @@ async function remove(k: Knowledge) {
 
 <template>
   <div>
+    <div class="bar">
+      <span class="count">{{ items.length }} 個段落</span>
+      <DistillHint :pending="distillPending ?? 0" @go="emit('go-distill')" />
+    </div>
     <div v-loading="loading" class="list">
       <div v-for="k in items" :key="k.id" class="item lc-card" :class="{ off: !k.enabled }">
         <div class="i-head">
@@ -103,6 +109,17 @@ async function remove(k: Knowledge) {
 </template>
 
 <style scoped lang="scss">
+.bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.count {
+  font-size: 13px;
+  color: var(--lc-muted);
+}
 .list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));

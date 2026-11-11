@@ -31,6 +31,8 @@ func (s *Server) automationRoutes(r chi.Router) {
 		r.Delete("/knowledge/{id}", s.deleteKnowledge)
 
 		r.Post("/test", s.testAutomation)
+
+		s.distillRoutes(r) // 蒸餾：從對話整理建議的規則／知識庫（見 distill.go）
 	})
 }
 
