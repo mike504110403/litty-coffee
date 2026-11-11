@@ -23,8 +23,8 @@ const C_AUTO = 'var(--lc-chart-1)'
 const C_HUMAN = 'var(--lc-chart-2)'
 const C_SINGLE = 'var(--lc-chart-1)'
 // 圖表卡片固定高度內的繪圖高度與表格／清單每頁列數
-const CH = 176
-const PS = 6
+const CH = 140
+const PS = 5
 
 const auth = useAuthStore()
 const canAnalytics = computed(() => auth.can('analytics'))
@@ -276,7 +276,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
               ]"
               :height="CH"
               :show-table="tableView"
-              :page-size="PS - 2"
+              :page-size="PS - 1"
               description="每日店家回覆數堆疊長條圖，分自動與真人"
             />
           </section>
@@ -380,12 +380,12 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
 // KPI：一排六格，數字＋標籤＋一行小字，緊湊不留白
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .tile {
-  padding: 8px 12px;
+  padding: 6px 10px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -407,7 +407,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   min-width: 0;
 }
 .t-value {
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 700;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
@@ -467,7 +467,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
 .grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
   > .card {
     grid-column: span 2;
     &:nth-child(n + 4) {
@@ -476,11 +476,11 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   }
 }
 .card {
-  padding: 10px 12px 12px;
+  padding: 8px 10px 8px;
   min-width: 0;
   // 圖表卡片固定高度：表格／清單太多列時在卡片內分頁，不撐高卡片（貼文成效表格另計）
   &:not(.posts-card) {
-    height: 250px;
+    height: 206px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -494,11 +494,11 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
   h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: 13px;
     display: inline-flex;
     align-items: center;
   }

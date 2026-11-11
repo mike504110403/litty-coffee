@@ -298,16 +298,16 @@ const multi = computed(() => props.series.length > 1)
 .pager {
   flex: none;
   margin-top: auto;
-  padding-top: 4px;
+  padding-top: 2px;
   justify-content: center;
 }
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
   th,
   td {
-    padding: 4px 8px;
+    padding: 2px 6px;
     border-bottom: 1px solid var(--lc-border);
     text-align: right;
     font-variant-numeric: tabular-nums;

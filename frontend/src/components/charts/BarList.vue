@@ -56,7 +56,7 @@ const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
 }
 .pager {
   margin-top: auto;
-  padding-top: 4px;
+  padding-top: 2px;
   justify-content: center;
 }
 .bar-list {
@@ -64,14 +64,14 @@ const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 li {
   display: grid;
   grid-template-columns: minmax(64px, 30%) 1fr;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: 12px;
 }
 .label {
   overflow: hidden;
@@ -85,7 +85,7 @@ li {
   min-width: 0;
 }
 .bar {
-  height: 14px;
+  height: 12px;
   min-width: 2px;
   border-radius: 0 4px 4px 0; // 貼基線端方、資料端圓
   max-width: calc(100% - 36px);
