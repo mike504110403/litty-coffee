@@ -17,6 +17,8 @@ stage: mvp
 - 可見帳號（安全邊界）：`admin_users.ig_account_ids`（NULL＝全部；店長一律全部），見 `internal/auth/scope.go`、`internal/httpapi/scope.go`。清單類 API 用 `?account=` 過濾，範圍外 403；單筆資源（對話、附件、顧客、貼文…）範圍外一律 404；自動回覆、上傳、AI 文案、模擬器必須指定帳號；連線層級（連結、同步、斷開）只限可見全部帳號的人；只看部分帳號的人只能授予自己看得到的帳號、不能授予「全部」
 - 真人回覆記錄 `messages.sent_by_admin_id`，收件匣顯示回覆者名字
 - 處理流程：webhook 先落 `webhook_events`，再由背景處理器依序走規則 → AI → 送出
+- 容器：後端、前端各一個 Docker 映像（`backend/Dockerfile`、`frontend/Dockerfile`）；前端映像＝靜態檔＋nginx，nginx 同時反向代理 `/api`、`/webhooks`、`/media`、`/healthz` 到後端
+- 部署：AWS Lightsail 單機同跑 dev＋prod（各自 PostgreSQL／Redis／後端／nginx，docker compose）；映像推 GHCR；GitHub Actions CI／CD 經 Tailscale SSH 部署；dev 只在 Tailscale 內網、prod 經 Cloudflare Tunnel 對外
 
 ## 地端起法
 
@@ -26,6 +28,12 @@ cd backend && cp .env.example .env   # 填 JWT_SECRET / ADMIN_PASSWORD
 set -a; . ./.env; set +a; go run ./cmd/server     # :8790
 cd frontend && npm install && npm run dev          # :5190，/api 代理到 :8790
 ```
+
+## 部署
+
+- 細節（架構、首次開機、GitHub Secrets／Environments、部署與回滾、備份還原、查日誌）見 `deploy/README.md`
+- push `dev` → 部署 dev；push `main` → 部署 prod；CI 通過才建映像與部署（`.github/workflows/`）
+- 主機上的真 `.env` 在 `/opt/litty/<env>/.env`，範本在 `deploy/env/`，真值不進 git
 
 ## 開發模擬器
 

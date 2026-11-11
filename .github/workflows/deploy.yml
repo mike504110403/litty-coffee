@@ -1,0 +1,198 @@
+name: Deploy
+
+# push dev → 部署 dev；push main → 部署 prod。先跑 CI（同一份 ci.yml），通過才建映像、部署。
+# 手動觸發（workflow_dispatch）＝回滾：把既有的 <sha> 映像重新標成 dev／prod 後部署，不重建。
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 部署目標環境
+        type: choice
+        options: [dev, prod]
+        required: true
+      sha:
+        description: 要回滾到的映像 tag（完整 40 碼 commit sha，GHCR 上須已存在）
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# 同一環境同時只跑一個部署；排隊不取消（避免部署做到一半被砍）
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'dev') }}
+  cancel-in-progress: false
+
+env:
+  BACKEND_IMAGE: ghcr.io/mike504110403/litty-coffee-backend
+  WEB_IMAGE: ghcr.io/mike504110403/litty-coffee-web
+  DEPLOY_HOST: litty-server
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      env: ${{ steps.m.outputs.env }}
+      tag: ${{ steps.m.outputs.tag }}
+    steps:
+      - id: m
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_SHA: ${{ inputs.sha }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            env_name="$IN_ENV"
+            tag="$IN_SHA"
+            if ! printf '%s' "$tag" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "sha 必須是完整 40 碼 commit sha" >&2
+              exit 1
+            fi
+          else
+            if [ "$REF" = main ]; then env_name=prod; else env_name=dev; fi
+            tag="$SHA"
+          fi
+          echo "env=$env_name" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "部署 $env_name ← $tag"
+
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [meta, ci]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: backend
+            context: backend
+            image: ghcr.io/mike504110403/litty-coffee-backend
+          - name: web
+            context: frontend
+            image: ghcr.io/mike504110403/litty-coffee-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ matrix.image }}:${{ needs.meta.outputs.tag }}
+            ${{ matrix.image }}:${{ needs.meta.outputs.env }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.meta.outputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  retag:
+    needs: meta
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 把 <sha> 映像重新標成環境 tag
+        env:
+          ENV_NAME: ${{ needs.meta.outputs.env }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          for img in "$BACKEND_IMAGE" "$WEB_IMAGE"; do
+            docker buildx imagetools create -t "$img:$ENV_NAME" "$img:$TAG"
+          done
+
+  deploy:
+    needs: [meta, build, retag]
+    if: >-
+      !cancelled() && needs.meta.result == 'success' &&
+      (needs.build.result == 'success' || needs.retag.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: ${{ needs.meta.outputs.env }}
+      url: ${{ needs.meta.outputs.env == 'prod' && 'https://admin.litty-coffee.com' || '' }}
+    env:
+      ENV_NAME: ${{ needs.meta.outputs.env }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: deploy
+
+      - name: 加入 Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ env.DEPLOY_HOST }}
+
+      - name: SSH 設定
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host $DEPLOY_HOST
+            User deploy
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 20
+            ServerAliveInterval 15
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: 複製 compose 檔與部署腳本
+        run: |
+          scp deploy/compose.yml "deploy/compose.$ENV_NAME.yml" deploy/deploy.sh "$DEPLOY_HOST:/opt/litty/$ENV_NAME/"
+          # shellcheck disable=SC2029  # 路徑刻意在 runner 端展開
+          ssh "$DEPLOY_HOST" chmod 755 "/opt/litty/$ENV_NAME/deploy.sh"
+
+      - name: 主機登入 GHCR（本 job 的短效 token）
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | ssh "$DEPLOY_HOST" docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: pull、up -d、健康檢查
+        run: |
+          # shellcheck disable=SC2029  # 路徑與環境名刻意在 runner 端展開
+          ssh "$DEPLOY_HOST" "/opt/litty/$ENV_NAME/deploy.sh" "$ENV_NAME"
+
+      - name: 主機登出 GHCR
+        if: always()
+        run: ssh "$DEPLOY_HOST" docker logout ghcr.io || true

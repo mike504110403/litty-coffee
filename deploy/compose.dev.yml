@@ -1,0 +1,6 @@
+# dev 疊加：web 綁在主機的 Tailscale IP（只有 tailnet 連得到），不綁 0.0.0.0。
+# 主機開了 net.ipv4.ip_nonlocal_bind=1（bootstrap.sh），開機時 Tailscale 還沒拿到 IP 也綁得上。
+services:
+  web:
+    ports:
+      - "${WEB_BIND:?WEB_BIND 未設（主機 Tailscale IP）}:${WEB_PORT:-8080}:80"

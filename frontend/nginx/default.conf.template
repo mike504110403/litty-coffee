@@ -1,0 +1,109 @@
+# litty-coffee web：SPA 靜態檔＋反向代理到同環境後端（${BACKEND_ADDR}，compose 服務名）。
+# 官方 nginx 映像啟動時用 envsubst 轉成 /etc/nginx/conf.d/default.conf（只替換 BACKEND_ 開頭的變數）。
+
+# 來源 IP：prod 唯一入口是 cloudflared，Cloudflare 會覆寫 CF-Connecting-IP 為真實用戶 IP（用戶送的同名標頭不會穿過 Cloudflare）；
+# dev 唯一入口是 Tailscale，沒有這個標頭 → 用連線來源。
+# 後端 audit.ClientIP 取 X-Forwarded-For「第一個」，所以這裡一律「覆寫」成單一值，不沿用用戶自帶的 XFF（避免偽造）。
+map $http_cf_connecting_ip $lc_client_ip {
+    ""      $remote_addr;
+    default $http_cf_connecting_ip;
+}
+# 原始協定：Cloudflare 會帶 X-Forwarded-Proto: https；沒有就用本段連線的協定
+map $http_x_forwarded_proto $lc_forwarded_proto {
+    ""      $scheme;
+    default $http_x_forwarded_proto;
+}
+
+log_format lc_main '$lc_client_ip - $remote_user [$time_local] "$request" $status $body_bytes_sent '
+                   '"$http_referer" "$http_user_agent" rt=$request_time';
+
+server {
+    listen 80 default_server;
+    server_name _;
+    server_tokens off;
+    access_log /var/log/nginx/access.log lc_main;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 後端上傳上限：影片 100MB（internal/media MaxVideoBytes）＋1MB multipart；留餘裕
+    client_max_body_size 110m;
+    client_body_timeout 300s;
+
+    # 用 Docker 內建 DNS 動態解析後端：後端容器重建換 IP 時不必重啟 nginx
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $lc_backend "${BACKEND_ADDR}";
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_set_header X-Real-IP $lc_client_ip;
+    proxy_set_header X-Forwarded-For $lc_client_ip;
+    proxy_set_header X-Forwarded-Proto $lc_forwarded_proto;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 300s;
+    proxy_read_timeout 300s;
+
+    # nginx 自身存活（容器 healthcheck 用，不打後端）
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # 後端健康檢查（含 DB ping），部署後驗證整條鏈用
+    location = /healthz {
+        access_log off;
+        proxy_pass http://$lc_backend;
+    }
+
+    # SSE：關閉緩衝與壓縮、長讀取逾時（後端每 25 秒送心跳）
+    location = /api/inbox/stream {
+        proxy_pass http://$lc_backend;
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    # 媒體上傳：不先落 nginx 暫存檔，直接串流給後端（後端 MaxBytesReader 把關 100MB），省 web 容器記憶體與磁碟
+    location = /api/media {
+        proxy_pass http://$lc_backend;
+        proxy_request_buffering off;
+    }
+
+    location /api/ {
+        proxy_pass http://$lc_backend;
+    }
+
+    location /webhooks/ {
+        proxy_pass http://$lc_backend;
+    }
+
+    location /media/ {
+        proxy_pass http://$lc_backend;
+    }
+
+    # Vite 產出的雜湊檔名：長快取
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html 不快取（部署後立即換新版）
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

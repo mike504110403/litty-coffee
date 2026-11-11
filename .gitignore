@@ -6,3 +6,6 @@ frontend/dist/
 .DS_Store
 .claude/settings.local.json
 backend/data/
+
+# 部署用的環境檔（真值只放主機 /opt/litty/<env>/.env）
+deploy/env/*.env

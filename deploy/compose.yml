@@ -1,0 +1,115 @@
+# litty-coffee 部署用 compose（dev／prod 共用）。
+# 主機上每個環境一個目錄 /opt/litty/<env>/，內含本檔、compose.<env>.yml 與 .env（不進 git）。
+# .env 內的 COMPOSE_PROJECT_NAME／COMPOSE_FILE 決定專案名與疊加檔，所以在該目錄直接 `docker compose ...` 即可。
+#   dev ：compose.yml + compose.dev.yml （web 綁主機 Tailscale IP:8080）
+#   prod：compose.yml + compose.prod.yml（cloudflared，web 不綁主機埠）
+# 兩環境的網路、volume、容器各自獨立（volume 名帶 LITTY_ENV 前綴）。
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litty
+      POSTGRES_DB: litty
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未設}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litty -d litty"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 30s
+    mem_limit: ${PG_MEM_LIMIT:-384m}
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF 開啟；maxmemory 低於容器上限，滿了回錯誤而不是被 OOM kill（程式目前尚未使用 Redis）
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-64mb}", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: ${REDIS_MEM_LIMIT:-128m}
+    logging: *logging
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/mike504110403/litty-coffee-backend}:${IMAGE_TAG:?IMAGE_TAG 未設}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ADDR: ":8790"
+      # POSTGRES_PASSWORD 請只用英數（openssl rand -hex 24），否則要自行 URL 編碼
+      DATABASE_URL: postgres://litty:${POSTGRES_PASSWORD}@postgres:5432/litty?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 未設}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 未設}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN 未設}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL 未設}
+      DEV_SIMULATOR: ${DEV_SIMULATOR:-0}
+      IG_APP_ID: ${IG_APP_ID:-}
+      IG_APP_SECRET: ${IG_APP_SECRET:-}
+      IG_CONFIG_ID: ${IG_CONFIG_ID:-}
+      IG_VERIFY_TOKEN: ${IG_VERIFY_TOKEN:-}
+      IG_ACCESS_TOKEN: ${IG_ACCESS_TOKEN:-}
+      IG_API_BASE: ${IG_API_BASE:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_EFFORT: ${AI_EFFORT:-}
+      TZ_STORE: ${TZ_STORE:-Asia/Taipei}
+      MEDIA_DIR: /data/media
+      # Go 執行期軟上限，略低於容器記憶體上限
+      GOMEMLIMIT: ${BACKEND_GOMEMLIMIT:-300MiB}
+    volumes:
+      - media:/data/media
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8790/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    mem_limit: ${BACKEND_MEM_LIMIT:-384m}
+    logging: *logging
+
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/mike504110403/litty-coffee-web}:${IMAGE_TAG:?IMAGE_TAG 未設}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_ADDR: backend:8790
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    mem_limit: ${WEB_MEM_LIMIT:-128m}
+    logging: *logging
+
+volumes:
+  pgdata:
+    name: litty-${LITTY_ENV:?LITTY_ENV 未設}-pgdata
+  redisdata:
+    name: litty-${LITTY_ENV:?LITTY_ENV 未設}-redisdata
+  media:
+    name: litty-${LITTY_ENV:?LITTY_ENV 未設}-media

@@ -1,0 +1,11 @@
+# 只送建置 cmd/server 需要的原始碼進 build context
+.env
+.env.*
+!.env.example
+bin/
+data/
+cmd/igdiag/
+Dockerfile
+.dockerignore
+**/*.md
+.DS_Store

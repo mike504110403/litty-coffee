@@ -1,0 +1,24 @@
+# prod 疊加：web 不綁主機埠，只有同網路的 cloudflared 連得到。
+# Tunnel 用 Cloudflare 後台管理（token 模式）：Public Hostname admin.litty-coffee.com → Service http://web:80
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-latest}
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN 未設}
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: ${CLOUDFLARED_MEM_LIMIT:-128m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
