@@ -10,13 +10,13 @@ import (
 
 const convSelect = `
 SELECT c.id, c.status, c.handler, c.unread_count, c.last_message_at, c.last_inbound_at, c.last_message_text, c.contact_read_at,
-       ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url
+       ct.ig_account_id, ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url
 FROM conversations c JOIN contacts ct ON ct.id = c.contact_id`
 
 func scanConv(row pgx.Row) (Conversation, error) {
 	var c Conversation
 	err := row.Scan(&c.ID, &c.Status, &c.Handler, &c.UnreadCount, &c.LastMessageAt, &c.LastInboundAt, &c.LastMessageText, &c.ContactReadAt,
-		&c.Contact.ID, &c.Contact.IGSID, &c.Contact.Username, &c.Contact.Name, &c.Contact.AvatarURL)
+		&c.IGAccountID, &c.Contact.ID, &c.Contact.IGSID, &c.Contact.Username, &c.Contact.Name, &c.Contact.AvatarURL)
 	if c.LastInboundAt != nil {
 		t := c.LastInboundAt.Add(ReplyWindow)
 		c.WindowExpiresAt = &t
@@ -25,9 +25,10 @@ func scanConv(row pgx.Row) (Conversation, error) {
 }
 
 type ListFilter struct {
-	Status string // open | closed | ""（全部）
-	Q      string
-	Limit  int
+	Status   string // open | closed | ""（全部）
+	Q        string
+	Limit    int
+	Accounts []int64 // 只列這些 IG 帳號（ig_accounts.id）；nil＝全部
 }
 
 func (s *Service) ListConversations(ctx context.Context, f ListFilter) ([]Conversation, error) {
@@ -37,8 +38,9 @@ func (s *Service) ListConversations(ctx context.Context, f ListFilter) ([]Conver
 	rows, err := s.DB.Query(ctx, convSelect+`
 WHERE ($1 = '' OR c.status = $1)
   AND ($2 = '' OR ct.username ILIKE '%' || $2 || '%' OR ct.name ILIKE '%' || $2 || '%' OR c.last_message_text ILIKE '%' || $2 || '%')
+  AND ($4::bigint[] IS NULL OR ct.ig_account_id = ANY($4))
 ORDER BY c.last_message_at DESC NULLS LAST
-LIMIT $3`, f.Status, f.Q, f.Limit)
+LIMIT $3`, f.Status, f.Q, f.Limit, f.Accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -87,11 +89,12 @@ SELECT `+msgCols+` FROM (
 	return out, rows.Err()
 }
 
-const msgCols = `m.id, m.conversation_id, m.direction, m.sender_type, m.kind, m.text, m.media_url, m.media_file, m.reaction,
+const msgCols = `m.id, m.conversation_id, mct.ig_account_id, m.direction, m.sender_type, m.kind, m.text, m.media_url, m.media_file, m.reaction,
   m.deleted_at, m.created_at, m.sent_by_admin_id, COALESCE(NULLIF(au.display_name, ''), au.username, '')`
 
-// msgJoin 帶出送出者（管理員）名稱；查詢須以 m 為 messages 別名。
-const msgJoin = `LEFT JOIN admin_users au ON au.id = m.sent_by_admin_id`
+// msgJoin 帶出送出者（管理員）名稱與所屬 IG 帳號；查詢須以 m 為 messages 別名。
+const msgJoin = `LEFT JOIN admin_users au ON au.id = m.sent_by_admin_id
+  JOIN conversations mc ON mc.id = m.conversation_id JOIN contacts mct ON mct.id = mc.contact_id`
 
 // MediaRoute 是收件匣附件的後台路徑（需登入）。
 const MediaRoute = "/api/inbox/media/"
@@ -102,7 +105,7 @@ func scanMsg(row pgx.Row) (Message, error) {
 	var deleted *time.Time
 	var sentByID *int64
 	var sentByName string
-	err := row.Scan(&m.ID, &m.ConversationID, &m.Direction, &m.SenderType, &m.Kind, &m.Text, &m.MediaURL, &file,
+	err := row.Scan(&m.ID, &m.ConversationID, &m.IGAccountID, &m.Direction, &m.SenderType, &m.Kind, &m.Text, &m.MediaURL, &file,
 		&m.Reaction, &deleted, &m.CreatedAt, &sentByID, &sentByName)
 	if sentByID != nil {
 		m.SentBy = &Sender{ID: *sentByID, DisplayName: sentByName}
@@ -112,6 +115,18 @@ func scanMsg(row pgx.Row) (Message, error) {
 	}
 	m.Deleted = deleted != nil
 	return m, err
+}
+
+// MediaAccount 回某個收件匣附件檔所屬的 IG 帳號（權限檢查用）；找不到回 ErrNotFound。
+func (s *Service) MediaAccount(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRow(ctx, `
+SELECT ct.ig_account_id FROM messages m JOIN conversations c ON c.id = m.conversation_id JOIN contacts ct ON ct.id = c.contact_id
+WHERE m.media_file = $1 LIMIT 1`, name).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }
 
 func (s *Service) GetMessage(ctx context.Context, id int64) (Message, error) {

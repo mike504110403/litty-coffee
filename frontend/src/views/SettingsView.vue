@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
-import { settingsApi, type IgAccount, type SettingsInfo } from '@/api/settings'
+import { settingsApi, type SettingsInfo } from '@/api/settings'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import AdminUsersPanel from '@/views/settings/AdminUsersPanel.vue'
 import CredentialsPanel from '@/views/settings/CredentialsPanel.vue'
+import IgAccountsPanel from '@/views/settings/IgAccountsPanel.vue'
+import { useAccountsStore } from '@/stores/accounts'
 
 const theme = useThemeStore()
 const themeOptions: { label: string; value: ThemeMode }[] = [
@@ -33,8 +35,7 @@ const subtitle = computed(() =>
 )
 
 const info = ref<SettingsInfo | null>(null)
-const busy = ref<'' | 'refresh' | 'subscribe' | 'disconnect'>('')
-const avatarFailed = ref(false)
+const accountsStore = useAccountsStore()
 
 // 憑證存檔後 IG 卡片的「能否連結」要跟著更新
 function onCredsSaved() {
@@ -51,70 +52,14 @@ onMounted(async () => {
   const err = typeof route.query.ig_error === 'string' ? route.query.ig_error : ''
   if (ok || err) {
     router.replace({ query: {} })
+    void accountsStore.fetch()
     if (ok) ElMessage.success('IG 帳號已連結')
     else ElMessage({ type: 'error', message: err, duration: 8000, showClose: true })
   }
   if (canIg.value) await load()
 })
 
-const account = computed(() => info.value?.account ?? null)
 const integ = computed(() => info.value?.integration)
-
-const DAY = 24 * 3600 * 1000
-const daysLeft = computed(() => {
-  const exp = account.value?.tokenExpires
-  return exp ? Math.floor((new Date(exp).getTime() - Date.now()) / DAY) : null
-})
-const tokenState = computed<{ type: 'success' | 'warning' | 'danger'; text: string }>(() => {
-  const d = daysLeft.value
-  if (d == null) return { type: 'warning', text: '未知' }
-  if (d < 0) return { type: 'danger', text: '已過期' }
-  if (d < 7) return { type: 'danger', text: `剩 ${d} 天` }
-  if (d < 20) return { type: 'warning', text: `剩 ${d} 天` }
-  return { type: 'success', text: `剩 ${d} 天` }
-})
-
-const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
-
-const accountTypeLabel: Record<string, string> = { BUSINESS: '商家帳號', MEDIA_CREATOR: '創作者帳號' }
-
-function connect() {
-  window.location.href = settingsApi.connectUrl
-}
-
-async function run(kind: 'refresh' | 'subscribe', fn: () => Promise<IgAccount>, okMsg: string) {
-  busy.value = kind
-  try {
-    const a = await fn()
-    if (info.value) info.value.account = a
-    ElMessage.success(okMsg)
-  } catch {
-    await load() // 失敗原因後端寫在 lastError
-  } finally {
-    busy.value = ''
-  }
-}
-
-async function disconnect() {
-  try {
-    await ElMessageBox.confirm(
-      '斷開後收不到新私訊、自動回覆和排程發文都會停止。已收到的對話與顧客資料會保留，之後重新連結即可恢復。',
-      `斷開 @${account.value?.username}？`,
-      { confirmButtonText: '斷開連結', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' },
-    )
-  } catch {
-    return
-  }
-  busy.value = 'disconnect'
-  try {
-    await settingsApi.disconnect()
-    ElMessage.success('已斷開')
-    await load()
-  } finally {
-    busy.value = ''
-  }
-}
 
 async function copy(text: string) {
   try {
@@ -167,124 +112,16 @@ async function savePassword() {
     <!-- IG 帳號 -->
     <section v-if="canIg" v-loading="!info" class="lc-card block">
       <h2>IG 帳號</h2>
-      <template v-if="info">
-        <div v-if="account" class="account">
-          <div class="who">
-            <img
-              v-if="account.profilePic && !avatarFailed"
-              :src="account.profilePic"
-              alt=""
-              class="pic"
-              @error="avatarFailed = true"
-            />
-            <div v-else class="pic fallback">{{ (account.username || '?').slice(0, 1).toUpperCase() }}</div>
-            <div class="names">
-              <div class="name">{{ account.name || account.username }}</div>
-              <div class="handle">
-                @{{ account.username }}
-                <el-tag size="small" type="info" effect="plain" round>
-                  {{ accountTypeLabel[account.accountType] ?? account.accountType }}
-                </el-tag>
-              </div>
-            </div>
-          </div>
-
-          <el-alert v-if="account.lastError" type="error" :closable="false" show-icon :title="account.lastError" class="alert" />
-          <el-alert
-            v-if="daysLeft != null && daysLeft < 0"
-            type="error"
-            :closable="false"
-            show-icon
-            title="授權已過期：收發私訊和發文都會失敗，請重新連結"
-            class="alert"
-          />
-
-          <dl class="facts">
-            <div>
-              <dt>授權到期</dt>
-              <dd>
-                {{ fmtDate(account.tokenExpires) }}
-                <el-tag size="small" :type="tokenState.type" round>{{ tokenState.text }}</el-tag>
-              </dd>
-            </div>
-            <div>
-              <dt>自動續期</dt>
-              <dd>剩 20 天內自動續期 60 天；上次 {{ fmtDate(account.tokenRefreshedAt) }}</dd>
-            </div>
-            <div>
-              <dt>私訊通知</dt>
-              <dd>
-                <el-tag size="small" :type="account.webhookSubscribed ? 'success' : 'danger'" round>
-                  {{ account.webhookSubscribed ? '已訂閱' : '未訂閱' }}
-                </el-tag>
-                <el-button
-                  v-if="!account.webhookSubscribed"
-                  link
-                  type="primary"
-                  :loading="busy === 'subscribe'"
-                  @click="run('subscribe', settingsApi.resubscribe, '已訂閱私訊通知')"
-                >
-                  重試訂閱
-                </el-button>
-              </dd>
-            </div>
-            <div>
-              <dt>連結時間</dt>
-              <dd>{{ fmtDate(account.connectedAt) }}</dd>
-            </div>
-          </dl>
-
-          <div class="actions">
-            <el-button :loading="busy === 'refresh'" @click="run('refresh', settingsApi.refresh, '授權已續期')">
-              立即續期
-            </el-button>
-            <el-button @click="connect">重新連結</el-button>
-            <el-button type="danger" plain :loading="busy === 'disconnect'" @click="disconnect">斷開連結</el-button>
-          </div>
-        </div>
-
-        <div v-else class="empty">
-          <p>
-            連結店家的 IG 商家帳號後，後台才能收發私訊、自動回覆和排程發文。按下按鈕會轉到 IG 登入並授權，完成後自動回到這裡。
-          </p>
-          <ul>
-            <li>帳號必須是「商家」或「創作者」帳號（IG App →設定→帳號類型）</li>
-            <li>會請求的權限：基本資料、管理私訊、發佈內容</li>
-          </ul>
-          <el-alert
-            v-if="!integ?.oauthReady"
-            type="warning"
-            :closable="false"
-            show-icon
-            title="後端尚未設定 IG_APP_ID／IG_APP_SECRET"
-            description="到 Meta 開發者後台建立 App、啟用 Instagram 登入後，把兩個值填進後端 .env 並重啟。"
-            class="alert"
-          />
-          <el-alert
-            v-else-if="integ?.simulator"
-            type="info"
-            :closable="false"
-            show-icon
-            title="模擬模式：不會真的跳到 IG，會直接連上模擬器的假帳號"
-            class="alert"
-          />
-          <el-alert
-            v-if="integ?.envTokenSet"
-            type="info"
-            :closable="false"
-            show-icon
-            title="目前發文暫用後端 .env 的 IG_ACCESS_TOKEN；連結帳號後改用連結的授權"
-            class="alert"
-          />
-          <el-button type="primary" size="large" :disabled="!integ?.oauthReady" @click="connect">連結 IG 帳號</el-button>
-        </div>
-      </template>
+      <IgAccountsPanel v-if="info" :info="info" @reload="load" />
     </section>
 
     <!-- 串接資訊 -->
     <section v-if="canIg && integ && info" class="lc-card block">
       <h2>串接資訊</h2>
-      <p class="hint">設定 Meta 開發者後台時要填的值。</p>
+      <p class="hint">
+        設定 Meta 開發者後台時要填的值。使用 Instagram API with Unified Login（官方建議新整合採用的設定）：在 App 的
+        Facebook 登入建立「配置」，勾選下列權限，把配置 ID 填進下方「憑證」。
+      </p>
       <el-alert
         v-if="insecurePublic && !integ.simulator"
         type="warning"
@@ -311,6 +148,20 @@ async function savePassword() {
         <div>
           <dt>Webhook 驗證碼</dt>
           <dd class="muted">在下方「憑證」的 Meta App 卡片設定，Meta 後台填同一個值</dd>
+        </div>
+        <div>
+          <dt>Webhook 欄位</dt>
+          <dd class="wrap"><code>messages</code><code>messaging_seen</code><code>message_reactions</code></dd>
+        </div>
+        <div>
+          <dt>配置要勾的權限</dt>
+          <dd class="wrap">
+            <code v-for="p in integ.permissions" :key="p">{{ p }}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>Graph API</dt>
+          <dd><code>{{ integ.apiBase || '—' }}</code></dd>
         </div>
         <div>
           <dt>店家時區</dt>
@@ -384,39 +235,6 @@ async function savePassword() {
 .alert {
   margin-bottom: 14px;
 }
-.who {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 16px;
-}
-.pic {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex: none;
-  &.fallback {
-    display: grid;
-    place-items: center;
-    background: var(--lc-caramel);
-    color: var(--lc-on-fill);
-    font-size: 22px;
-    font-weight: 600;
-  }
-}
-.name {
-  font-weight: 600;
-  font-size: 16px;
-}
-.handle {
-  color: var(--lc-muted);
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-}
 .facts {
   margin: 0 0 16px;
   > div {
@@ -463,6 +281,9 @@ async function savePassword() {
     flex: none;
   }
 }
+.copyable dd.wrap {
+  flex-wrap: wrap;
+}
 .theme-hint {
   margin: 10px 0 0;
 }
@@ -470,28 +291,6 @@ async function savePassword() {
 .muted {
   color: var(--lc-muted);
   font-size: 13px;
-}
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  .el-button + .el-button {
-    margin-left: 0;
-  }
-}
-.empty {
-  p {
-    margin: 0 0 8px;
-    line-height: 1.6;
-    font-size: 14px;
-  }
-  ul {
-    margin: 0 0 16px;
-    padding-left: 20px;
-    color: var(--lc-muted);
-    font-size: 13px;
-    line-height: 1.8;
-  }
 }
 .pw {
   max-width: 360px;

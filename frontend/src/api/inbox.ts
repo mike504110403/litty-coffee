@@ -21,6 +21,7 @@ export interface Conversation {
   lastMessageText: string
   windowExpiresAt: string | null
   contactReadAt: string | null
+  igAccountId: number // 對話屬於哪個我方 IG 帳號（回覆也從這個帳號送出）
   contact: Contact
 }
 
@@ -29,6 +30,7 @@ export type SenderType = 'contact' | 'bot' | 'ai' | 'human'
 export interface Message {
   id: number
   conversationId: number
+  igAccountId: number
   direction: 'in' | 'out'
   senderType: SenderType
   kind: string
@@ -41,7 +43,7 @@ export interface Message {
 }
 
 export const inboxApi = {
-  list: (params: { status?: string; q?: string } = {}) =>
+  list: (params: { status?: string; q?: string; account?: number } = {}) =>
     http.get<Conversation[]>('/conversations', { params }).then((r) => r.data),
   get: (id: number) => http.get<Conversation>(`/conversations/${id}`).then((r) => r.data),
   patch: (id: number, body: Partial<Pick<Conversation, 'handler' | 'status'>>) =>
@@ -55,6 +57,7 @@ export const inboxApi = {
 export const devApi = {
   status: () => http.get<{ simulator: boolean }>('/dev/status').then((r) => r.data),
   simulate: (body: {
+    account?: number // 收訊的我方帳號；省略＝第一個已連結的
     username: string
     name?: string
     text?: string

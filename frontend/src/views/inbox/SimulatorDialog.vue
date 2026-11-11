@@ -1,11 +1,22 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { devApi } from '@/api/inbox'
+import AccountSelect from '@/components/AccountSelect.vue'
+import { useAccountsStore } from '@/stores/accounts'
 
 const visible = defineModel<boolean>({ required: true })
 
 const form = reactive({ username: 'latte_lover', name: '小拿', text: '' })
+// 收訊的我方帳號（模擬多個店家帳號）
+const accounts = useAccountsStore()
+const account = ref<number | null>(null)
+watch(visible, async (v) => {
+  if (!v) return
+  await accounts.fetch() // 剛在設定頁連結／停用過時要拿到最新狀態
+  if (account.value == null || !accounts.byId.has(account.value))
+    account.value = accounts.list.find((a) => a.active && a.connected)?.id ?? null
+})
 const presets = ['請問今天有營業嗎？', '菜單在哪裡可以看？', '想訂位，週六下午 4 個人', '有提供插座跟 wifi 嗎？', '可以帶狗狗嗎']
 const people = [
   { username: 'latte_lover', name: '小拿' },
@@ -18,7 +29,7 @@ async function send() {
   if (!form.username.trim() || !form.text.trim()) return
   sending.value = true
   try {
-    await devApi.simulate({ ...form })
+    await devApi.simulate({ ...form, account: account.value ?? undefined })
     ElMessage.success('已送出模擬訊息')
     form.text = ''
   } finally {
@@ -32,7 +43,7 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
   if (!form.username.trim()) return
   evBusy.value = action + emoji
   try {
-    await devApi.simulate({ username: form.username, name: form.name, action, emoji })
+    await devApi.simulate({ username: form.username, name: form.name, action, emoji, account: account.value ?? undefined })
     ElMessage.success(`已模擬：${label}`)
   } finally {
     evBusy.value = ''
@@ -44,6 +55,9 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
   <el-dialog v-model="visible" title="模擬客人傳 DM" width="min(440px, 92vw)" align-center>
     <p class="note">開發模式專用：組出和 IG webhook 相同格式的事件，走完整的入庫流程。</p>
     <el-form label-position="top" @submit.prevent="send">
+      <el-form-item label="傳給哪個店家帳號">
+        <AccountSelect v-model="account" class="full" placeholder="請先到設定頁連結 IG 帳號" />
+      </el-form-item>
       <el-form-item label="客人">
         <div class="people">
           <el-check-tag
@@ -87,6 +101,9 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
 </template>
 
 <style scoped lang="scss">
+.full {
+  width: 100%;
+}
 .note {
   margin: -6px 0 14px;
   font-size: 13px;

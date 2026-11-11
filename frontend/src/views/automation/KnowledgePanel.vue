@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import { automationApi, type Knowledge } from '@/api/automation'
 
+// 編輯的是這個 IG 帳號的資料（父層切換帳號時以 key 重建本元件）
+const props = defineProps<{ accountId: number }>()
+
 const items = ref<Knowledge[]>([])
 const loading = ref(true)
 const dirty = ref<Set<number>>(new Set())
@@ -20,7 +23,7 @@ const hints: Record<string, string> = {
 async function load() {
   loading.value = true
   try {
-    items.value = await automationApi.knowledge()
+    items.value = await automationApi.knowledge(props.accountId)
     dirty.value = new Set()
   } finally {
     loading.value = false
@@ -33,7 +36,7 @@ const markDirty = (k: Knowledge) => dirty.value.add(k.id)
 async function save(k: Knowledge) {
   saving.value = k.id
   try {
-    Object.assign(k, await automationApi.saveKnowledge(k))
+    Object.assign(k, await automationApi.saveKnowledge(props.accountId, k))
     dirty.value.delete(k.id)
     ElMessage.success(`「${k.title}」已儲存`)
   } finally {
@@ -51,12 +54,12 @@ async function add() {
   if (!res) return
   const value = res.value
   const sort = (items.value[items.value.length - 1]?.sort ?? 0) + 10
-  items.value.push(await automationApi.saveKnowledge({ title: value.trim(), content: '', enabled: true, sort }))
+  items.value.push(await automationApi.saveKnowledge(props.accountId, { title: value.trim(), content: '', enabled: true, sort }))
 }
 
 async function remove(k: Knowledge) {
   if (!(await ElMessageBox.confirm(`刪除「${k.title}」？`, '刪除段落', { type: 'warning', confirmButtonText: '刪除', cancelButtonText: '取消' }).catch(() => false))) return
-  await automationApi.deleteKnowledge(k.id)
+  await automationApi.deleteKnowledge(props.accountId, k.id)
   items.value = items.value.filter((x) => x.id !== k.id)
 }
 </script>

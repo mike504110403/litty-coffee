@@ -9,6 +9,7 @@ export interface Tag {
 
 export interface CrmContact {
   id: number
+  igAccountId: number // 傳訊給哪個我方 IG 帳號
   igsid: string
   username: string
   name: string
@@ -66,16 +67,18 @@ export interface Summary {
 }
 
 export const crmApi = {
-  contacts: (params: { q?: string; tag?: number; sort?: string } = {}) =>
+  contacts: (params: { q?: string; tag?: number; sort?: string; account?: number } = {}) =>
     http.get<CrmContact[]>('/contacts', { params }).then((r) => r.data),
   contact: (id: number) => http.get<ContactDetail>(`/contacts/${id}`).then((r) => r.data),
   updateContact: (id: number, body: { note?: string; tagIds?: number[] }) =>
     http.patch<ContactDetail>(`/contacts/${id}`, body).then((r) => r.data),
 
-  tags: () => http.get<Tag[]>('/tags').then((r) => r.data),
+  // 標籤全店共用；count 只算可見（或指定）帳號的顧客
+  tags: (account?: number) => http.get<Tag[]>('/tags', { params: { account } }).then((r) => r.data),
   createTag: (name: string) => http.post<Tag>('/tags', { name }).then((r) => r.data),
   updateTag: (t: Tag) => http.put<Tag>(`/tags/${t.id}`, t).then((r) => r.data),
   deleteTag: (id: number) => http.delete(`/tags/${id}`),
 
-  summary: (days: number) => http.get<Summary>('/analytics/summary', { params: { days } }).then((r) => r.data),
+  summary: (days: number, account?: number) =>
+    http.get<Summary>('/analytics/summary', { params: { days, account } }).then((r) => r.data),
 }

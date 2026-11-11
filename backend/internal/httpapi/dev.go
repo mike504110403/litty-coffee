@@ -13,12 +13,47 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 )
 
-// DevAccountID 是模擬器使用的假 IG 商家帳號 ID。
-const DevAccountID = "dev-litty-coffee"
+// ErrSimNotConnected 是還沒（模擬）連結任何帳號時的提示。
+const errSimNotConnected = "請先到設定頁連結 IG 帳號（模擬）"
 
-// simulate 假裝某位 IG 用戶傳了一則 DM：組出與真 webhook 同形的 payload，走同一條入庫路徑。
+// simAccount 決定模擬訊息要送到哪個我方帳號：指定的（須可見、已連結、啟用）或第一個可見且已連結的。
+func (s *Server) simAccount(w http.ResponseWriter, r *http.Request, want int64) (igUserID string, id int64, ok bool) {
+	list, err := s.visibleAccounts(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return "", 0, false
+	}
+	usable := func(connected, active bool) bool { return connected && active }
+	if want > 0 {
+		if !canSee(r, want) {
+			writeErr(w, http.StatusForbidden, errAccountForbidden)
+			return "", 0, false
+		}
+		for _, a := range list {
+			if a.ID == want {
+				if !usable(a.Connected, a.Active) {
+					writeErr(w, http.StatusConflict, "這個帳號未連結或已停用")
+					return "", 0, false
+				}
+				return a.IGUserID, a.ID, true
+			}
+		}
+		writeErr(w, http.StatusNotFound, "找不到這個 IG 帳號")
+		return "", 0, false
+	}
+	for _, a := range list {
+		if usable(a.Connected, a.Active) {
+			return a.IGUserID, a.ID, true
+		}
+	}
+	writeErr(w, http.StatusConflict, errSimNotConnected)
+	return "", 0, false
+}
+
+// simulate 假裝某位 IG 用戶傳了一則 DM 給我方某個帳號：組出與真 webhook 同形的 payload，走同一條入庫路徑。
 func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
+		Account  int64  `json:"account"` // 收訊的我方帳號（ig_accounts.id）；0＝第一個已連結的
 		Username string `json:"username"`
 		Name     string `json:"name"`
 		Text     string `json:"text"`
@@ -38,6 +73,10 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "username 與 text（或 image）必填")
 		return
 	}
+	accountIGID, accountID, ok := s.simAccount(w, r, in.Account)
+	if !ok {
+		return
+	}
 	sum := sha1.Sum([]byte(in.Username))
 	igsid := "dev-" + hex.EncodeToString(sum[:6])
 	if s.Fake != nil {
@@ -51,7 +90,7 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	event := map[string]any{
 		"sender":    map[string]string{"id": igsid},
-		"recipient": map[string]string{"id": DevAccountID},
+		"recipient": map[string]string{"id": accountIGID},
 		"timestamp": now.UnixMilli(),
 	}
 	// 找這位客人對話裡的最後一則（out＝我方送出、in＝客人傳的）
@@ -59,8 +98,8 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 		var mid string
 		err := s.DB.QueryRow(r.Context(), `
 SELECT m.ig_mid FROM messages m JOIN conversations c ON c.id = m.conversation_id JOIN contacts ct ON ct.id = c.contact_id
-WHERE ct.igsid = $1 AND m.direction = $2 AND m.deleted_at IS NULL AND m.ig_mid IS NOT NULL
-ORDER BY m.created_at DESC, m.id DESC LIMIT 1`, igsid, direction).Scan(&mid)
+WHERE ct.igsid = $1 AND m.direction = $2 AND m.deleted_at IS NULL AND m.ig_mid IS NOT NULL AND ct.ig_account_id = $3
+ORDER BY m.created_at DESC, m.id DESC LIMIT 1`, igsid, direction, accountID).Scan(&mid)
 		if err != nil {
 			return "", fmt.Errorf("找不到可操作的訊息")
 		}
@@ -98,7 +137,7 @@ ORDER BY m.created_at DESC, m.id DESC LIMIT 1`, igsid, direction).Scan(&mid)
 	payload := map[string]any{
 		"object": "instagram",
 		"entry": []map[string]any{{
-			"id":        DevAccountID,
+			"id":        accountIGID,
 			"time":      now.UnixMilli(),
 			"messaging": []map[string]any{event},
 		}},
@@ -108,5 +147,5 @@ ORDER BY m.created_at DESC, m.id DESC LIMIT 1`, igsid, direction).Scan(&mid)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"igsid": igsid})
+	writeJSON(w, http.StatusAccepted, map[string]any{"igsid": igsid, "account": accountID})
 }

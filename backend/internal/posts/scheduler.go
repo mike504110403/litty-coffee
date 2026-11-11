@@ -13,16 +13,26 @@ import (
 
 // Scheduler 到點發佈貼文。失敗自動重試（共 MaxAttempts 次，間隔遞增），用盡才標 failed。
 // 發佈中途中斷（重啟、當機）時，以容器狀態判斷 IG 是否已發佈，避免重複貼文。
+// 每篇貼文用「該貼文帳號所屬連線」的 token 發佈；IG 帳號 ID 直接讀 ig_accounts.ig_user_id
+// （Unified Login 的 token 是系統用戶，/me 不是 IG 帳號，不能拿來查）。
 type Scheduler struct {
 	Svc          *Service
 	IG           ig.Publisher
-	Token        string                                    // 固定 token（測試、模擬器）
-	TokenFunc    func(ctx context.Context) (string, error) // 非 nil 時每次發文前取（設定頁連結的帳號）
-	PollInterval time.Duration                             // 容器處理中時的輪詢間隔
-	PollTimeout  time.Duration                             // 影片處理最久等多久
-	StaleAfter   time.Duration                             // publishing 超過這段時間視為中斷
+	Creds        CredentialsFunc // 每篇貼文發文前取該帳號的 (IG 帳號 ID, token)
+	OnAPIError   func(ctx context.Context, accountID int64, err error)
+	PollInterval time.Duration // 容器處理中時的輪詢間隔
+	PollTimeout  time.Duration // 影片處理最久等多久
+	StaleAfter   time.Duration // publishing 超過這段時間視為中斷
+}
 
-	userID, userTok string
+// CredentialsFunc 回某帳號（ig_accounts.id）的 IG 帳號 ID 與 token；正式環境是 account.Service.Credentials。
+type CredentialsFunc func(ctx context.Context, accountID int64) (igUserID, token string, err error)
+
+func (f CredentialsFunc) get(ctx context.Context, accountID int64) (string, string, error) {
+	if f == nil {
+		return "", "", ErrNoToken
+	}
+	return f(ctx, accountID)
 }
 
 var retryBackoff = []time.Duration{time.Minute, 5 * time.Minute}
@@ -71,6 +81,9 @@ WHERE id = (
 		return false, nil
 	}
 	if perr != nil {
+		if sc.OnAPIError != nil {
+			sc.OnAPIError(ctx, p.IGAccountID, perr)
+		}
 		return false, sc.fail(ctx, p, perr, now)
 	}
 	_, err = sc.Svc.DB.Exec(ctx, `
@@ -103,34 +116,8 @@ UPDATE scheduled_posts SET status = 'scheduled', error = $2, next_attempt_at = $
 	return err
 }
 
-func (sc *Scheduler) uid(ctx context.Context, tok string) (string, error) {
-	if sc.userID != "" && sc.userTok == tok {
-		return sc.userID, nil
-	}
-	id, err := sc.IG.UserID(ctx, tok)
-	if err != nil {
-		return "", fmt.Errorf("查 IG 帳號失敗：%w", err)
-	}
-	sc.userID, sc.userTok = id, tok
-	return id, nil
-}
-
-func (sc *Scheduler) token(ctx context.Context) (string, error) {
-	if sc.TokenFunc != nil {
-		return sc.TokenFunc(ctx)
-	}
-	if sc.Token == "" {
-		return "", errors.New("尚未連結 IG 帳號（到「設定」連結）")
-	}
-	return sc.Token, nil
-}
-
 func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink string, err error) {
-	tok, err := sc.token(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	userID, err := sc.uid(ctx, tok)
+	userID, tok, err := sc.Creds.get(ctx, p.IGAccountID)
 	if err != nil {
 		return "", "", err
 	}

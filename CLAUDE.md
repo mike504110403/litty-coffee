@@ -9,11 +9,12 @@ stage: mvp
 - 後端：Go（chi＋pgx＋goose，migration 嵌入 binary、啟動時自動跑）；`backend/`
 - DB：PostgreSQL 16（docker compose，地端 port 54330）
 - AI：Claude API（Go 直接呼叫 Anthropic API；回覆用 haiku、分析用 sonnet）
-- IG：官方 Instagram API with Instagram Login（商家帳號）；開發期用模擬器假造 webhook
+- IG：官方 Instagram API with Unified Login（Facebook 登入的「配置」；官方建議新整合採用的設定），可同時連多個 IG 專業帳號；開發期用模擬器假造 webhook
 - 前端：Vue 3＋TS＋Vite＋Element Plus＋Pinia＋vue-router；`frontend/`；用 npm（pnpm 在 Node 20 上會壞）
 - i18n：只做繁中，不掛 vue-i18n（單一店家）
 - 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner）
 - 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, ig_accounts, credentials, admins）；店長全權。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
+- 可見帳號（安全邊界）：`admin_users.ig_account_ids`（NULL＝全部；店長一律全部），見 `internal/auth/scope.go`、`internal/httpapi/scope.go`。清單類 API 用 `?account=` 過濾，範圍外 403；單筆資源（對話、附件、顧客、貼文…）範圍外一律 404；自動回覆、上傳、AI 文案、模擬器必須指定帳號；連線層級（連結、同步、斷開）只限可見全部帳號的人；只看部分帳號的人只能授予自己看得到的帳號、不能授予「全部」
 - 真人回覆記錄 `messages.sent_by_admin_id`，收件匣顯示回覆者名字
 - 處理流程：webhook 先落 `webhook_events`，再由背景處理器依序走規則 → AI → 送出
 
@@ -28,26 +29,30 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 
 ## 開發模擬器
 
-`.env` 設 `DEV_SIMULATOR=1`：送訊走假 sender（`internal/ig/fake.go`），後台收件匣出現「模擬訊息」按鈕（`POST /api/dev/simulate`），組出與真 webhook 同形的 payload 走同一條入庫路徑。
+`.env` 設 `DEV_SIMULATOR=1`：送訊走假 sender（`internal/ig/fake.go`），後台收件匣出現「模擬訊息」按鈕（`POST /api/dev/simulate`，body `account`＝收訊的我方帳號），組出與真 webhook 同形的 payload 走同一條入庫路徑。要先到設定頁（模擬）連結，否則 409「請先到設定頁連結 IG 帳號（模擬）」。
 
 - 測試：`TEST_DATABASE_URL=postgres://litty:litty@localhost:54330/litty_test?sslmode=disable go test -p 1 ./...`（`litty_test` 庫需先建；`-p 1` 必要：各套件共用同一個測試庫會互相 TRUNCATE；未設時整合測試跳過）
-- webhook 公開路徑：`GET/POST /webhooks/instagram`（驗 `X-Hub-Signature-256`）；串真 IG 時需公開 HTTPS
-- 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）；事件 `message.created`／`message.updated`（表情、收回）／`conversation.updated`
-- 附件：收到當下下載到 `MEDIA_DIR/inbox/`（≤25MB，以內容判型、只收圖片／影片／音訊），只經登入後的 `/api/inbox/media/{name}` 提供；下載失敗保留 IG 原網址並記 `messages.media_error`
+- webhook 公開路徑：`GET/POST /webhooks/instagram`（驗 `X-Hub-Signature-256`，金鑰＝Meta App Secret）；串真 IG 時需公開 HTTPS
+- webhook 只收「已連結」的帳號（`entry.id` 在 `ig_accounts`、啟用中、有掛連線）；其他一律不入庫、不自動建帳號，`webhook_events.error = '未連結的帳號'`。重複送達靠 `ig_mid` 去重
+- 統一收件匣：多個帳號的私訊合併在一起，可依帳號篩選；回覆一律從「對話所屬帳號」、用該帳號連線的 token 送出
+- 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）；事件 `message.created`／`message.updated`（表情、收回）／`conversation.updated`，資料都帶 `igAccountId`；只推登入者可見帳號的事件，每 25 秒心跳時重讀登入者（停用、失去收件匣權限即斷線，可見帳號變更立即生效）
+- 附件：收到當下下載到 `MEDIA_DIR/inbox/`（≤25MB，以內容判型、只收圖片／影片／音訊），只經登入後的 `/api/inbox/media/{name}` 提供（看不到該對話帳號的人回 404）；下載失敗保留 IG 原網址並記 `messages.media_error`
 - 已讀（messaging_seen）→ `conversations.contact_read_at`；表情（message_reactions）只記顧客按的 → `messages.reaction`；收回（is_deleted）→ 清空內容與本地檔、留 `deleted_at`
-- 模擬器另可送「客人已讀／按表情／收回」事件
-- Meta App 後台的 webhook 欄位要勾 `messages`、`messaging_seen`、`message_reactions`（連結時程式也會用 subscribed_apps 訂閱這三個）
+- 模擬器另可送「客人已讀／按表情／收回」事件；可選送到哪個店家帳號
+- Meta App 後台的 webhook 欄位要勾 `messages`、`messaging_seen`、`message_reactions`（連結時程式也會逐一用 `POST /{ig-id}/subscribed_apps` 訂閱這三個）
 
 ## 自動回覆
 
 - 流程：顧客訊息入庫 → 等合併秒數（設定頁可調）→ 只處理該對話最新一則 → handler=human 則跳過 → 關鍵字規則（priority 小的先）→ AI（`internal/automation/ai.go`，結構化輸出 reply/handoff＋intent）→ 送出或轉真人
+- 依帳號：設定、知識庫、規則都有 `ig_account_id`；引擎用「對話所屬帳號」的那一份。`ig_account_id IS NULL` 的是範本，帳號第一次用到時（`automation.Store.EnsureAccount`）從範本複製一份。自動回覆頁上方選帳號，沙盒也用選的帳號；API 除 `/automation/status` 外都要帶 `?account=`
 - AI：`ANTHROPIC_API_KEY`、`AI_MODEL`（預設 claude-opus-5-5）、`AI_EFFORT`（預設 low）；開啟 server-side refusal fallback（`fallbacks: default`）
 - 意圖寫進顧客訊息的 `messages.meta.intent`，分析頁用
 
 ## 顧客與分析
 
 - 標籤 `tags`／`contact_tags`；顧客清單一次查詢帶出標籤（json_agg）與互動數
-- 分析 `GET /api/analytics/summary?days=N`：依店家時區（`TZ_STORE`，預設 Asia/Taipei；binary 內嵌 tzdata）切日；同時回前一個等長區間供漲跌
+- 顧客清單顯示來自哪個帳號、可依帳號篩選；標籤全店共用，標籤數只算可見（或篩選）帳號的顧客
+- 分析 `GET /api/analytics/summary?days=N&account=`（省略＝可見的全部帳號；熱門規則同名合併）：依店家時區（`TZ_STORE`，預設 Asia/Taipei；binary 內嵌 tzdata）切日；同時回前一個等長區間供漲跌
 - 回應時間口徑：顧客「開啟回合」（前一則不是顧客訊息）到店家第一則回覆；同回合連傳只算一次
 - 圖表色：淺色 自動＝`#2a78d6`、真人＝`#eb6834`；深色 自動＝`#3987e5`、真人＝`#d95926`（surface `#251a14`）。dataviz 參考色盤 slot 1/2，兩模式都跑過 validator；咖啡色系配色 chroma 不足或紅綠色盲分不開，故不用。單一系列一律用 slot 1。元件一律用 `--lc-chart-*` 變數
 - 深色模式：`html.dark`＋Element Plus 官方 dark css-vars，再以 `theme.scss` 的 `html.dark` 覆寫成暖棕色系；設定頁「外觀」選 跟隨系統／淺色／深色（localStorage `lc-theme`，`index.html` 內聯腳本防首繪閃白）；主色填色上的字在深色用深字（白字對焦糖底對比不足）。`IgPreview` 刻意維持 IG 淺色外觀
@@ -57,24 +62,28 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 媒體：`POST /api/media` 存到 `MEDIA_DIR`（預設 `./data/media`，不進 git），以公開路徑 `/media/{隨機檔名}` 提供；IG 從 `PUBLIC_BASE_URL` + 該路徑抓檔，所以正式環境必須是 IG 抓得到的 HTTPS。PNG 一律轉 JPEG（IG 只收 JPEG），透明處補白
 - 狀態：draft → scheduled → publishing → published｜failed。失敗自動重試共 3 次（1 分、5 分後），用盡才 failed；failed 可修改後重新排程（計數歸零）
 - 中斷復原：publishing 超過 10 分鐘視為中斷；有 `ig_container_id` 時先查容器狀態，PUBLISHED 即直接標已發佈，不重發
-- 發佈 token：設定頁連結帳號的 token（`account.Service.Token`），沒連結才用 `IG_ACCESS_TOKEN` 兜底（DEV_SIMULATOR=1 時走 `ig.FakePublisher`）
-- AI 寫文案：`POST /api/posts/caption`，沿用自動回覆的人設與知識庫
-- 成效（Insights）：`posts.InsightsRefresher` 每 15 分掃一次，只更新近 30 天已發佈的；未滿 7 天每 6 小時、之後每天；限動只在 24 小時內。指標：貼文／輪播／Reels＝views, reach, likes, comments, saved, shares；限動＝views, reach, replies, shares（`impressions` 已棄用）。手動 `POST /api/posts/{id}/insights/refresh`。需 `instagram_business_manage_insights` 權限（加權限後既有帳號要重新連結）
+- 依帳號：每篇貼文有 `ig_account_id`（編輯器選帳號，預設上次用的；預覽顯示該帳號頭像與名稱）；月曆／清單標示帳號、可篩選。媒體上傳時就歸屬帳號（`POST /api/media` 表單欄位 `account`），存貼文時檢查媒體都屬於貼文的帳號
+- 發佈 token：貼文帳號所屬連線的 token（`account.Service.Credentials`），IG 帳號 ID 直接讀 `ig_accounts.ig_user_id`（系統用戶 token 的 `/me` 不是 IG 帳號，不打）；帳號沒掛連線才用 `IG_ACCESS_TOKEN` 兜底；停用的帳號不發（DEV_SIMULATOR=1 時走 `ig.FakePublisher`，token 一樣來自模擬連線）
+- AI 寫文案：`POST /api/posts/caption`（body `account` 必填），用該帳號自動回覆的人設與知識庫
+- 成效（Insights）：用貼文帳號的 token；`posts.InsightsRefresher` 每 15 分掃一次，只更新近 30 天已發佈的；未滿 7 天每 6 小時、之後每天；限動只在 24 小時內。指標：貼文／輪播／Reels＝views, reach, likes, comments, saved, shares；限動＝views, reach, replies, shares（`impressions` 已棄用）。手動 `POST /api/posts/{id}/insights/refresh`。需 `instagram_manage_insights` 權限（配置裡加權限後要重新連結）
 
 ## 設定頁／IG 帳號連結
 
-- OAuth：Business Login for Instagram（`internal/ig/oauth.go`）。`IG_APP_ID`＋`IG_APP_SECRET` 齊全才開；redirect URI＝`WEB_ORIGIN/api/ig/oauth/callback`（Meta 後台登記同一個，須 HTTPS）
-- 流程：`/api/ig/oauth/start` 產 state 放 cookie（10 分、一次性）→ IG 授權 → callback 驗 state → code 換短效 → 長效 60 天 → `/me` 取 `user_id`（＝webhook entry.id）→ 訂閱 messages webhook → 導回 `/settings?ig=connected|ig_error=`
-- 同時只有一個已連結帳號（有 token 者）；連新帳號會清掉舊帳號 token，但顧客／對話保留；斷開同理
-- 續期：背景每 6 小時，剩 20 天內續 60 天；IG 規定 token 滿 24 小時才能續；失敗寫 `ig_accounts.last_error` 顯示在設定頁，下輪再試；已過期只能重新連結
-- 個人帳號（account_type=PERSONAL）拒絕連結
-- 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上模擬器帳號 `dev-litty-coffee`
+- 方式：Instagram API with Unified Login（`internal/ig/oauth.go`）。Meta App ID／App Secret（應用程式設定 → 基本資料）＋Facebook 登入「配置」的配置 ID 三者齊全才開（後台「憑證」或 `IG_APP_ID`／`IG_APP_SECRET`／`IG_CONFIG_ID`）；redirect URI＝`WEB_ORIGIN/api/ig/oauth/callback`（Meta 後台登記同一個，須 HTTPS）。配置要勾 `instagram_basic`、`instagram_manage_messages`、`instagram_content_publish`、`instagram_manage_insights`
+- 流程：`/api/ig/oauth/start` 產 state 放 cookie（10 分、一次性）→ `facebook.com/dialog/oauth?client_id&config_id&redirect_uri&response_type=code&state`（不帶 scope）→ callback 驗 state → `GET graph.facebook.com/v27.0/oauth/access_token` 換到業務組合的系統用戶 token（SUAT）→ `/me?fields=id,client_business_id` → `/me/assigned_instagram_accounts`（跟著 `paging.cursors` 翻頁）同步全部帳號 → 逐一 `POST /{ig-id}/subscribed_apps` → 導回 `/settings?ig=connected|ig_error=`
+- 資料：一次授權＝一個連線（`ig_connections`：client_business_id、系統用戶 id、config_id、token 以 AES-256-GCM 加密、`token_expires` NULL＝永不過期、last_error）；帳號（`ig_accounts`）以 `connection_id` 掛在連線下、可停用（`active`）。同一業務組合重新連結＝更新同一個連線；授權沒再包含的帳號會脫離連線（需重新連結）。webhook 先到過的同 ID 帳號會合併，顧客對話不分家
+- SUAT 只能打 `graph.facebook.com`（`IG_API_BASE` 預設 `https://graph.facebook.com/v27.0`）；token 壽命在配置裡設（預設永不過期），連結時讀 `expires_in`，沒有就試 `GET /debug_token`；剩不到 14 天設定頁顯示「需重新連結」，過期就不給 token
+- token 失效（店家移除 app、帳號移到別的業務組合、過期）：IG API 回 code 190 時寫在連線的 `last_error`，設定頁顯示
+- 設定頁：依連線列出全部帳號（頭像、名稱、啟用狀態、私訊訂閱、連線到期）。每個帳號可「停用／啟用」（停用＝webhook 拒收、不送訊不發文，資料保留）、「重試訂閱」；每個連線可「同步帳號」（`POST /api/ig/connections/{id}/refresh`）、「重新連結」、「斷開連線」（只刪 token，帳號、顧客、對話保留）
+- 帳號清單 `GET /api/ig/accounts`：所有登入者可用，只回可見帳號（各頁的帳號篩選／選擇器用）
+- 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上兩個模擬帳號 `dev-litty-coffee`、`dev-litty-roastery`
 - 改密碼：`POST /api/auth/password`，既有 session 不撤銷
 
 ## 憑證（後台可設定）
 
-- `app_settings` 表；IG App ID／Secret／驗證碼、Claude key／模型／強度可在設定頁「憑證」填寫，DB 值優先於 `.env`，存檔即生效（`appsettings.Store` 快照＋`LiveOAuth`／`automation.LiveAI` 原子替換）
-- 機密欄位 AES-256-GCM 加密（`internal/secrets`），鑰匙＝env `SECRET_KEY`；未設時由 `JWT_SECRET` 推導（MVP 兜底，畢業前要設獨立 `SECRET_KEY`，換鑰匙＝已存密文讀不回）。API 只回尾 4 碼
+- `app_settings` 表；Meta App ID／Secret／配置 ID／驗證碼、Claude key／模型／強度可在設定頁「憑證」填寫，DB 值優先於 `.env`，存檔即生效（`appsettings.Store` 快照＋`LiveOAuth`／`automation.LiveAI` 原子替換）
+- Meta 欄位：App ID、App Secret、配置 ID、Webhook 驗證 Token
+- 機密欄位與 IG 連線 token 都以 AES-256-GCM 加密（`internal/secrets`），鑰匙＝env `SECRET_KEY`；未設時由 `JWT_SECRET` 推導（MVP 兜底，畢業前要設獨立 `SECRET_KEY`，換鑰匙＝已存密文讀不回）。API 只回尾 4 碼
 - 「測試連線」用 Anthropic Models List（不計費）；IG App 沒有可靠的便宜檢查，未做
 
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
@@ -83,7 +92,12 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - IG 真實發佈（Content Publishing API）尚未實測：端點與參數依官方文件寫成，串上真帳號時需驗；尚未查 `content_publishing_limit`（24h 上限）
 - 成效 API 未接真帳號實測；文件寫輪播（album）可能無成效數據，目前照一般貼文請求，失敗會記在 `insights_error`
 - 附件下載失敗不重試（IG 網址過期後也抓不到）
-- IG OAuth 真實流程尚未實測（需 Meta App＋HTTPS 網址）；IG 帳號的 access token 仍以明文存 DB（憑證已加密），畢業總審時評估一併加密
+- Unified Login 真實流程尚未實測（需 Meta App＋配置＋HTTPS 網址）；`/debug_token` 能否查 SUAT 到期日未驗證；v27.0 是否為最新穩定版未驗證
+- 私訊（`{ig-id}/messages`）與顧客 profile 在 graph.facebook.com 上未以真帳號驗證；Unified Login 沒有 `message_echoes`，從 IG App 直接回的訊息可能不會進後台（echo 處理保留但不依賴）
+- 未實作 Token Management API（`POST /{client_business_id}/system_user_access_tokens`）：配置若設了到期日，到期前只能請店家重新連結
+- Unified Login 沒有 account_type，無法擋個人帳號（個人帳號本來也指派不到業務組合）
+- 斷開連線不會呼叫 DELETE subscribed_apps（webhook 改由「未連結的帳號」拒收）
+- 標籤是全店共用的；只看部分帳號的人仍能新增／改名／刪除標籤
 - 管理員重設密碼不會撤銷對方既有 session
 
 ## IG API 限制（設計時以此為準）

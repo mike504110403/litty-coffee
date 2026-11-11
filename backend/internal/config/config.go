@@ -15,10 +15,11 @@ type Config struct {
 	SecretKey     string // 加密 DB 內 secret 用的金鑰；空＝由 JWT_SECRET 衍生（MVP 兜底，main 會記警告）
 
 	// Instagram
-	IGAppID       string // Instagram 登入的 App ID（設定頁 OAuth 連結用）
-	IGAppSecret   string // 驗 webhook X-Hub-Signature-256；也用於 OAuth 換 token
+	IGAppID       string // Meta App ID（應用程式設定 → 基本資料；設定頁 Unified Login 連結用）
+	IGAppSecret   string // Meta App Secret：驗 webhook X-Hub-Signature-256；也用於 OAuth 換 token
+	IGConfigID    string // Facebook 登入的配置 ID（Unified Login 授權網址的 config_id）
 	IGVerifyToken string // webhook 訂閱驗證
-	IGAccessToken string // 兜底用：設定頁沒連結帳號時才用
+	IGAccessToken string // 兜底用：帳號沒掛連線時才用
 	IGAPIBase     string
 	DevSimulator  bool // true＝不打真 IG：送訊走假 sender、開放 /api/dev/simulate
 
@@ -44,9 +45,10 @@ func Load() (Config, error) {
 		SecretKey:       os.Getenv("SECRET_KEY"),
 		IGAppID:         os.Getenv("IG_APP_ID"),
 		IGAppSecret:     os.Getenv("IG_APP_SECRET"),
+		IGConfigID:      os.Getenv("IG_CONFIG_ID"),
 		IGVerifyToken:   os.Getenv("IG_VERIFY_TOKEN"),
 		IGAccessToken:   os.Getenv("IG_ACCESS_TOKEN"),
-		IGAPIBase:       env("IG_API_BASE", "https://graph.instagram.com/v23.0"),
+		IGAPIBase:       env("IG_API_BASE", "https://graph.facebook.com/v27.0"),
 		DevSimulator:    os.Getenv("DEV_SIMULATOR") == "1",
 		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
 		AIModel:         env("AI_MODEL", "claude-opus-5-5"),

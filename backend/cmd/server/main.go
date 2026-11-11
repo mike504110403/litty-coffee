@@ -60,7 +60,7 @@ func main() {
 		log.Print("警告：未設 SECRET_KEY，後台憑證加密金鑰改由 JWT_SECRET 衍生（MVP 兜底）；換 JWT_SECRET 會讓已存憑證解不開，正式環境請設獨立的 SECRET_KEY")
 	}
 	creds := appsettings.New(pool, box, appsettings.Values{
-		IGAppID: cfg.IGAppID, IGAppSecret: cfg.IGAppSecret, IGVerifyToken: cfg.IGVerifyToken,
+		IGAppID: cfg.IGAppID, IGAppSecret: cfg.IGAppSecret, IGConfigID: cfg.IGConfigID, IGVerifyToken: cfg.IGVerifyToken,
 		AnthropicKey: cfg.AnthropicAPIKey, AIModel: cfg.AIModel, AIEffort: cfg.AIEffort,
 	})
 	if err := creds.Load(ctx); err != nil {
@@ -77,7 +77,6 @@ func main() {
 		log.Print("DEV_SIMULATOR=1: IG 送訊走假 sender，/api/dev/simulate 已開啟")
 	}
 	api.Inbox = inbox.NewService(pool, messenger, hub)
-	api.Inbox.DefaultToken = cfg.IGAccessToken
 	api.Inbox.MediaDir = cfg.MediaDir
 	engine := &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: api.Inbox, Ctx: ctx}
 	// AI 永遠掛同一個 LiveAI；沒 key 時 Enabled()＝false（只跑規則、文案回 503）。設定頁存檔時由 OnChange 換 key／模型
@@ -111,29 +110,31 @@ func main() {
 
 	api.Media = &media.Store{DB: pool, Dir: cfg.MediaDir, PublicBase: cfg.PublicBaseURL}
 	api.Posts = posts.NewService(pool, api.Media)
-	// IG 帳號連結：設定頁 OAuth；模擬模式下授權頁直接導回，連上模擬器的假商家帳號
-	api.Info = httpapi.SystemInfo{WebOrigin: cfg.WebOrigin, PublicBaseURL: cfg.PublicBaseURL, Timezone: cfg.Timezone}
-	api.Accounts = &account.Service{DB: pool, FallbackToken: cfg.IGAccessToken}
+	// IG 帳號連結（Unified Login）：設定頁 OAuth；模擬模式下授權頁直接導回，連上兩個模擬商家帳號。
+	// 每個帳號用自己所屬連線的 token（加密存 DB）；帳號沒掛連線時才用 env IG_ACCESS_TOKEN 兜底
+	api.Info = httpapi.SystemInfo{WebOrigin: cfg.WebOrigin, PublicBaseURL: cfg.PublicBaseURL, Timezone: cfg.Timezone, APIBase: cfg.IGAPIBase}
+	api.Accounts = &account.Service{DB: pool, Box: box, FallbackToken: cfg.IGAccessToken}
+	api.Inbox.Creds = api.Accounts
 	redirectURI := cfg.WebOrigin + "/api/ig/oauth/callback"
 	switch {
 	case cfg.DevSimulator:
-		api.Accounts.OAuth = ig.NewFakeOAuth(redirectURI, httpapi.DevAccountID)
+		api.Accounts.OAuth = ig.NewFakeOAuth(redirectURI)
 	default:
-		// 隨設定頁存檔即時換 App ID／Secret；沒憑證時 account.Service 視為未設定
+		// 隨設定頁存檔即時換 Meta App ID／Secret／配置 ID；沒憑證時 account.Service 視為未設定
 		api.Accounts.OAuth = &appsettings.LiveOAuth{Store: creds, RedirectURI: redirectURI, APIBase: cfg.IGAPIBase,
 			SettingsErrorURL: cfg.WebOrigin + "/settings"}
 	}
-	go api.Accounts.RunRefresher(ctx)
 
-	scheduler := &posts.Scheduler{Svc: api.Posts, IG: ig.NewClient(cfg.IGAPIBase), TokenFunc: api.Accounts.Token}
+	var publisher ig.Publisher = ig.NewClient(cfg.IGAPIBase)
 	if cfg.DevSimulator {
-		scheduler.IG, scheduler.TokenFunc = ig.NewFakePublisher(), nil
-		scheduler.Token = "dev-token"
+		publisher = ig.NewFakePublisher()
 	}
+	scheduler := &posts.Scheduler{Svc: api.Posts, IG: publisher, Creds: api.Accounts.Credentials, OnAPIError: api.Accounts.NoteAPIError}
 	go scheduler.Run(ctx)
 
 	// 已發佈貼文的成效數據：背景更新＋手動更新 API 共用同一個 refresher
-	api.Posts.Insights = &posts.InsightsRefresher{Svc: api.Posts, IG: scheduler.IG, TokenFunc: scheduler.TokenFunc, Token: scheduler.Token}
+	api.Posts.Insights = &posts.InsightsRefresher{Svc: api.Posts, IG: publisher, Creds: api.Accounts.Credentials,
+		OnAPIError: api.Accounts.NoteAPIError}
 	go api.Posts.Insights.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
 

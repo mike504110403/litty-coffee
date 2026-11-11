@@ -34,6 +34,8 @@ func (s *Server) automationRoutes(r chi.Router) {
 	})
 }
 
+// 自動回覆的設定、知識庫、規則都依 IG 帳號區分：除了 /status，每個端點都要帶 ?account=<id>（範圍外 403）。
+
 func (s *Server) autoErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, automation.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "找不到資料")
@@ -55,7 +57,11 @@ func (s *Server) autoStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getAutoSettings(w http.ResponseWriter, r *http.Request) {
-	st, err := s.Auto.Store.GetSettings(r.Context())
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
+	st, err := s.Auto.Store.GetSettings(r.Context(), acc)
 	if err != nil {
 		s.autoErr(w, err)
 		return
@@ -64,12 +70,20 @@ func (s *Server) getAutoSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putAutoSettings(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	var st automation.Settings
 	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	st, err := s.Auto.Store.SaveSettings(r.Context(), st)
+	st, err := s.Auto.Store.SaveSettings(r.Context(), acc, st)
+	if errors.Is(err, automation.ErrNotFound) {
+		s.autoErr(w, err)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -78,7 +92,11 @@ func (s *Server) putAutoSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Auto.Store.ListRules(r.Context(), false)
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.Auto.Store.ListRules(r.Context(), acc, false)
 	if err != nil {
 		s.autoErr(w, err)
 		return
@@ -93,12 +111,20 @@ func decodeRule(r *http.Request) (automation.Rule, error) {
 }
 
 func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	in, err := decodeRule(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	out, err := s.Auto.Store.CreateRule(r.Context(), in)
+	out, err := s.Auto.Store.CreateRule(r.Context(), acc, in)
+	if errors.Is(err, automation.ErrNotFound) {
+		s.autoErr(w, err)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -107,6 +133,10 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	id, err := idParam(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
@@ -118,7 +148,7 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
-	out, err := s.Auto.Store.UpdateRule(r.Context(), in)
+	out, err := s.Auto.Store.UpdateRule(r.Context(), acc, in)
 	if errors.Is(err, automation.ErrNotFound) {
 		s.autoErr(w, err)
 		return
@@ -131,12 +161,16 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	id, err := idParam(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := s.Auto.Store.DeleteRule(r.Context(), id); err != nil {
+	if err := s.Auto.Store.DeleteRule(r.Context(), acc, id); err != nil {
 		s.autoErr(w, err)
 		return
 	}
@@ -144,7 +178,11 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listKnowledge(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Auto.Store.ListKnowledge(r.Context())
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.Auto.Store.ListKnowledge(r.Context(), acc)
 	if err != nil {
 		s.autoErr(w, err)
 		return
@@ -153,6 +191,10 @@ func (s *Server) listKnowledge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveKnowledge(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	var in automation.Knowledge
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
@@ -167,7 +209,7 @@ func (s *Server) saveKnowledge(w http.ResponseWriter, r *http.Request) {
 		}
 		in.ID = id
 	}
-	out, err := s.Auto.Store.SaveKnowledge(r.Context(), in)
+	out, err := s.Auto.Store.SaveKnowledge(r.Context(), acc, in)
 	if errors.Is(err, automation.ErrNotFound) {
 		s.autoErr(w, err)
 		return
@@ -180,20 +222,28 @@ func (s *Server) saveKnowledge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteKnowledge(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	id, err := idParam(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := s.Auto.Store.DeleteKnowledge(r.Context(), id); err != nil {
+	if err := s.Auto.Store.DeleteKnowledge(r.Context(), acc, id); err != nil {
 		s.autoErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// testAutomation 是試答沙盒：用目前的規則、知識庫、設定跑一次，不送出。
+// testAutomation 是試答沙盒：用指定帳號目前的規則、知識庫、設定跑一次，不送出。
 func (s *Server) testAutomation(w http.ResponseWriter, r *http.Request) {
+	acc, ok := accountQuery(w, r)
+	if !ok {
+		return
+	}
 	var in struct {
 		History []struct {
 			FromCustomer bool   `json:"fromCustomer"`
@@ -205,7 +255,7 @@ func (s *Server) testAutomation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "請輸入測試訊息")
 		return
 	}
-	st, err := s.Auto.Store.GetSettings(r.Context())
+	st, err := s.Auto.Store.GetSettings(r.Context(), acc)
 	if err != nil {
 		s.autoErr(w, err)
 		return
@@ -222,7 +272,7 @@ func (s *Server) testAutomation(w http.ResponseWriter, r *http.Request) {
 	hist = append(hist, inbox.Message{Direction: "in", Kind: "text", Text: in.Text})
 
 	start := time.Now()
-	out, err := s.Auto.Evaluate(r.Context(), st, hist)
+	out, err := s.Auto.Evaluate(r.Context(), acc, st, hist)
 	if err != nil {
 		log.Printf("automation test: %v", err)
 		writeErr(w, http.StatusBadGateway, "AI 呼叫失敗："+err.Error())

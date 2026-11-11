@@ -21,7 +21,7 @@ const (
 
 var (
 	ErrInsightsUnavailable = errors.New("這篇貼文目前無法取得成效數據")
-	ErrNoToken             = errors.New("尚未連結 IG 帳號（到「設定」連結）")
+	ErrNoToken             = errors.New("這個 IG 帳號目前無法取得授權")
 )
 
 // canRefreshInsights 判斷一篇貼文現在能不能向 IG 查成效：已發佈、有 media id，限動另限 24 小時內。
@@ -33,22 +33,13 @@ func canRefreshInsights(p Post, now time.Time) bool {
 }
 
 // InsightsRefresher 背景更新已發佈貼文的成效數據；單篇失敗只記 log 與 insights_error，不影響其他貼文。
+// 每篇用該貼文帳號所屬連線的 token。
 type InsightsRefresher struct {
-	Svc       *Service
-	IG        ig.Publisher
-	Token     string                                    // 固定 token（測試、模擬器）
-	TokenFunc func(ctx context.Context) (string, error) // 非 nil 時每次取設定頁連結帳號的 token
-	Every     time.Duration                             // 掃描間隔，預設 15 分鐘（實際更新節奏由貼文年齡決定）
-}
-
-func (r *InsightsRefresher) token(ctx context.Context) (string, error) {
-	if r.TokenFunc != nil {
-		return r.TokenFunc(ctx)
-	}
-	if r.Token == "" {
-		return "", ErrNoToken
-	}
-	return r.Token, nil
+	Svc        *Service
+	IG         ig.Publisher
+	Creds      CredentialsFunc
+	OnAPIError func(ctx context.Context, accountID int64, err error)
+	Every      time.Duration // 掃描間隔，預設 15 分鐘（實際更新節奏由貼文年齡決定）
 }
 
 func (r *InsightsRefresher) Run(ctx context.Context) {
@@ -72,7 +63,7 @@ func (r *InsightsRefresher) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce 找出到期的貼文逐篇更新，回傳成功篇數。無 token 時整輪略過（回 error 由呼叫端記 log）。
+// RunOnce 找出到期的貼文逐篇更新，回傳成功篇數。帳號沒 token 的貼文略過（記 log），不影響其他帳號。
 func (r *InsightsRefresher) RunOnce(ctx context.Context, now time.Time) (int, error) {
 	rows, err := r.Svc.DB.Query(ctx, `
 SELECT id FROM scheduled_posts
@@ -98,19 +89,12 @@ ORDER BY published_at DESC`,
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	if len(ids) == 0 {
-		return 0, nil
-	}
-	tok, err := r.token(ctx)
-	if err != nil {
-		return 0, err
-	}
 	ok := 0
 	for _, id := range ids {
 		if ctx.Err() != nil {
 			break
 		}
-		if _, err := r.refresh(ctx, tok, id, now); err != nil {
+		if _, err := r.refresh(ctx, id, now); err != nil {
 			log.Printf("insights: post %d: %v", id, err)
 			continue
 		}
@@ -123,14 +107,10 @@ func secs(d time.Duration) string { return fmt.Sprintf("%d seconds", int(d.Secon
 
 // RefreshPost 手動更新單篇；回傳更新後的貼文。
 func (r *InsightsRefresher) RefreshPost(ctx context.Context, id int64) (Post, error) {
-	tok, err := r.token(ctx)
-	if err != nil {
-		return Post{}, err
-	}
-	return r.refresh(ctx, tok, id, time.Now())
+	return r.refresh(ctx, id, time.Now())
 }
 
-func (r *InsightsRefresher) refresh(ctx context.Context, tok string, id int64, now time.Time) (Post, error) {
+func (r *InsightsRefresher) refresh(ctx context.Context, id int64, now time.Time) (Post, error) {
 	p, err := r.Svc.Get(ctx, id)
 	if err != nil {
 		return p, err
@@ -138,8 +118,15 @@ func (r *InsightsRefresher) refresh(ctx context.Context, tok string, id int64, n
 	if !canRefreshInsights(p, now) {
 		return p, ErrInsightsUnavailable
 	}
+	_, tok, err := r.Creds.get(ctx, p.IGAccountID)
+	if err != nil {
+		return p, fmt.Errorf("%w：%v", ErrNoToken, err)
+	}
 	m, err := r.IG.Insights(ctx, tok, p.igMediaID, p.Kind)
 	if err != nil {
+		if r.OnAPIError != nil {
+			r.OnAPIError(ctx, p.IGAccountID, err)
+		}
 		_, _ = r.Svc.DB.Exec(ctx, `UPDATE scheduled_posts SET insights_checked_at = $2, insights_error = $3 WHERE id = $1`,
 			id, now, err.Error())
 		return p, err

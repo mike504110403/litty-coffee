@@ -48,9 +48,10 @@ func (e *Engine) AIEnabled() bool {
 const historyTurns = 20
 
 // OnInbound 掛在 inbox.Service.OnInbound：等合併時間後，只處理該對話最新一則顧客訊息。
+// 用的是「這段對話所屬帳號」的設定、知識庫與規則。
 func (e *Engine) OnInbound(convID int64, msg inbox.Message) {
 	go func() {
-		st, err := e.Store.GetSettings(e.Ctx)
+		st, err := e.Store.GetSettings(e.Ctx, msg.IGAccountID)
 		if err != nil {
 			log.Printf("automation: settings: %v", err)
 			return
@@ -86,7 +87,7 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 		return nil // 有更新的訊息（或店家已回覆），交給後面那次處理
 	}
 
-	out, err := e.Evaluate(ctx, st, history)
+	out, err := e.Evaluate(ctx, conv.IGAccountID, st, history)
 	if err != nil {
 		return err
 	}
@@ -123,8 +124,8 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 	return nil
 }
 
-// Evaluate 決定要怎麼回：先比關鍵字規則，沒命中再問 AI。不送出、不改資料。
-func (e *Engine) Evaluate(ctx context.Context, st Settings, history []inbox.Message) (Outcome, error) {
+// Evaluate 決定要怎麼回：先比該帳號的關鍵字規則，沒命中再問 AI（用該帳號的知識庫）。不送出、不改資料。
+func (e *Engine) Evaluate(ctx context.Context, accountID int64, st Settings, history []inbox.Message) (Outcome, error) {
 	if len(history) == 0 {
 		return Outcome{Kind: "none"}, nil
 	}
@@ -133,7 +134,7 @@ func (e *Engine) Evaluate(ctx context.Context, st Settings, history []inbox.Mess
 		return Outcome{Kind: "none", Detail: "最後一則不是顧客訊息"}, nil
 	}
 
-	rules, err := e.Store.ListRules(ctx, true)
+	rules, err := e.Store.ListRules(ctx, accountID, true)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -151,7 +152,7 @@ func (e *Engine) Evaluate(ctx context.Context, st Settings, history []inbox.Mess
 		return Outcome{Kind: "none", Detail: "尚未設定 Claude API Key"}, nil
 	}
 
-	kb, err := e.Store.ListKnowledge(ctx)
+	kb, err := e.Store.ListKnowledge(ctx, accountID)
 	if err != nil {
 		return Outcome{}, err
 	}

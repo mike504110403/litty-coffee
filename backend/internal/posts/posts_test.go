@@ -3,6 +3,7 @@ package posts
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -14,9 +15,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/mike504110403/litty-coffee/backend/internal/db"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
+	"github.com/mike504110403/litty-coffee/backend/internal/testdb"
 )
 
 func TestCountHashtags(t *testing.T) {
@@ -25,22 +26,26 @@ func TestCountHashtags(t *testing.T) {
 	}
 }
 
+// testAcc 是 setup 建的 IG 帳號（ig_user_id "acct"）；貼文與媒體預設掛在它下面。
+var testAcc int64
+
+// testCreds 依帳號回 ("ig-"+帳號 ID 的 ig_user_id, "tok-"+ig_user_id)，用來驗證發佈用的是貼文帳號的 token。
+func testCreds(pool *pgxpool.Pool) CredentialsFunc {
+	return func(ctx context.Context, id int64) (string, string, error) {
+		var igID string
+		if err := pool.QueryRow(ctx, `SELECT ig_user_id FROM ig_accounts WHERE id = $1`, id).Scan(&igID); err != nil {
+			return "", "", err
+		}
+		return igID, "tok-" + igID, nil
+	}
+}
+
 func setup(t *testing.T) (*Service, *pgxpool.Pool) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	if err := db.Migrate(url); err != nil {
+	pool := testdb.Open(t)
+	if _, err := pool.Exec(context.Background(), `TRUNCATE scheduled_posts, media_assets, ig_accounts, ig_connections RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := db.Connect(context.Background(), url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(context.Background(), `TRUNCATE scheduled_posts, media_assets RESTART IDENTITY`); err != nil {
-		t.Fatal(err)
-	}
+	testAcc = testdb.ConnectedAccount(t, pool, "acct")
 	store := &media.Store{DB: pool, Dir: t.TempDir(), PublicBase: "https://example.test"}
 	return NewService(pool, store), pool
 }
@@ -64,7 +69,7 @@ func pngBytes(t *testing.T, w, h int, transparent bool) []byte {
 }
 
 func upload(t *testing.T, s *Service, data []byte) media.Asset {
-	a, err := s.Media.Save(context.Background(), "x.png", bytes.NewReader(data))
+	a, err := s.Media.Save(context.Background(), testAcc, "x.png", bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +101,7 @@ func TestMediaSave(t *testing.T) {
 	if v := upload(t, s, fakeMP4()); v.Kind != "video" || v.ContentType != "video/mp4" {
 		t.Fatalf("mp4: %+v", v)
 	}
-	if _, err := s.Media.Save(context.Background(), "a.txt", strings.NewReader("hello")); err == nil {
+	if _, err := s.Media.Save(context.Background(), testAcc, "a.txt", strings.NewReader("hello")); err == nil {
 		t.Fatal("text file should be rejected")
 	}
 	if got := s.Media.PublicURL(a.Filename); got != "https://example.test/media/"+a.Filename {
@@ -119,20 +124,20 @@ func TestValidate(t *testing.T) {
 		p    Post
 		ok   bool
 	}{
-		{"image ok", Post{Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &future}, true},
-		{"image ratio", Post{Kind: "image", MediaIDs: []int64{tall}, ScheduledAt: &future}, false},
-		{"image needs one", Post{Kind: "image", MediaIDs: []int64{square, square}, ScheduledAt: &future}, false},
-		{"image not video", Post{Kind: "image", MediaIDs: []int64{video}, ScheduledAt: &future}, false},
-		{"carousel ok", Post{Kind: "carousel", MediaIDs: []int64{square, video}, ScheduledAt: &future}, true},
-		{"carousel too few", Post{Kind: "carousel", MediaIDs: []int64{square}, ScheduledAt: &future}, false},
-		{"reel ok", Post{Kind: "reel", MediaIDs: []int64{video}, ScheduledAt: &future}, true},
-		{"reel needs video", Post{Kind: "reel", MediaIDs: []int64{square}, ScheduledAt: &future}, false},
-		{"story image", Post{Kind: "story", MediaIDs: []int64{tall}, ScheduledAt: &future}, true},
-		{"past time", Post{Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &past}, false},
-		{"no time", Post{Kind: "image", MediaIDs: []int64{square}}, false},
-		{"too many tags", Post{Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &future,
+		{"image ok", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &future}, true},
+		{"image ratio", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{tall}, ScheduledAt: &future}, false},
+		{"image needs one", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{square, square}, ScheduledAt: &future}, false},
+		{"image not video", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{video}, ScheduledAt: &future}, false},
+		{"carousel ok", Post{IGAccountID: testAcc, Kind: "carousel", MediaIDs: []int64{square, video}, ScheduledAt: &future}, true},
+		{"carousel too few", Post{IGAccountID: testAcc, Kind: "carousel", MediaIDs: []int64{square}, ScheduledAt: &future}, false},
+		{"reel ok", Post{IGAccountID: testAcc, Kind: "reel", MediaIDs: []int64{video}, ScheduledAt: &future}, true},
+		{"reel needs video", Post{IGAccountID: testAcc, Kind: "reel", MediaIDs: []int64{square}, ScheduledAt: &future}, false},
+		{"story image", Post{IGAccountID: testAcc, Kind: "story", MediaIDs: []int64{tall}, ScheduledAt: &future}, true},
+		{"past time", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &past}, false},
+		{"no time", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{square}}, false},
+		{"too many tags", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{square}, ScheduledAt: &future,
 			Caption: strings.Repeat("#tag ", 31)}, false},
-		{"missing media", Post{Kind: "image", MediaIDs: []int64{9999}, ScheduledAt: &future}, false},
+		{"missing media", Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{9999}, ScheduledAt: &future}, false},
 	}
 	for _, c := range cases {
 		p := c.p
@@ -145,7 +150,7 @@ func TestValidate(t *testing.T) {
 
 func newScheduler(s *Service) (*Scheduler, *ig.FakePublisher) {
 	f := ig.NewFakePublisher()
-	return &Scheduler{Svc: s, IG: f, Token: "t", PollInterval: time.Millisecond, PollTimeout: time.Second}, f
+	return &Scheduler{Svc: s, IG: f, Creds: testCreds(s.DB), PollInterval: time.Millisecond, PollTimeout: time.Second}, f
 }
 
 func TestSaveAndPublish(t *testing.T) {
@@ -155,18 +160,18 @@ func TestSaveAndPublish(t *testing.T) {
 	img := upload(t, s, pngBytes(t, 50, 50, false)).ID
 
 	// 草稿：媒體可空、不會被發佈
-	draft, err := s.Save(ctx, Post{Kind: "image", Caption: "草稿"}, "draft", now)
+	draft, err := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", Caption: "草稿"}, "draft", now)
 	if err != nil || draft.Status != "draft" {
 		t.Fatalf("draft: %+v %v", draft, err)
 	}
 	// 未來排程
 	later := now.Add(2 * time.Hour)
-	future, err := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}, ScheduledAt: &later, Caption: "晚點發"}, "schedule", now)
+	future, err := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}, ScheduledAt: &later, Caption: "晚點發"}, "schedule", now)
 	if err != nil || future.Status != "scheduled" {
 		t.Fatalf("schedule: %+v %v", future, err)
 	}
 	// 立即發佈
-	nowPost, err := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}, Caption: "#新品 上市"}, "now", now)
+	nowPost, err := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}, Caption: "#新品 上市"}, "now", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,13 +195,13 @@ func TestSaveAndPublish(t *testing.T) {
 	}
 
 	// 已發佈不能改、可刪本地紀錄
-	if _, err := s.Save(ctx, Post{ID: nowPost.ID, Kind: "image", MediaIDs: []int64{img}}, "draft", now); err != ErrImmutable {
+	if _, err := s.Save(ctx, Post{IGAccountID: testAcc, ID: nowPost.ID, Kind: "image", MediaIDs: []int64{img}}, "draft", now); err != ErrImmutable {
 		t.Fatalf("edit published: %v", err)
 	}
 	if err := s.Delete(ctx, nowPost.ID); err != nil {
 		t.Fatal(err)
 	}
-	n, _ := s.CountUpcoming(ctx)
+	n, _ := s.CountUpcoming(ctx, nil)
 	if n != 1 {
 		t.Fatalf("upcoming = %d", n)
 	}
@@ -208,7 +213,7 @@ func TestRetryAndExhaust(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	img := upload(t, s, pngBytes(t, 50, 50, false)).ID
-	p, _ := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}}, "now", now)
+	p, _ := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}}, "now", now)
 
 	sc, fake := newScheduler(s)
 	fake.FailNext = 1
@@ -228,7 +233,7 @@ func TestRetryAndExhaust(t *testing.T) {
 	}
 
 	// 連續失敗用盡 → failed
-	p2, _ := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}}, "now", now)
+	p2, _ := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}}, "now", now)
 	fake.FailNext = 10
 	at := now
 	for i := 0; i < MaxAttempts; i++ {
@@ -240,7 +245,7 @@ func TestRetryAndExhaust(t *testing.T) {
 		t.Fatalf("exhausted: %+v", got)
 	}
 	// 失敗的可以修改後重新排程，計數歸零
-	again, err := s.Save(ctx, Post{ID: p2.ID, Kind: "image", MediaIDs: []int64{img}}, "now", at)
+	again, err := s.Save(ctx, Post{IGAccountID: testAcc, ID: p2.ID, Kind: "image", MediaIDs: []int64{img}}, "now", at)
 	if err != nil || again.Status != "scheduled" || again.Attempts != 0 || again.Error != "" {
 		t.Fatalf("reschedule failed post: %+v %v", again, err)
 	}
@@ -251,7 +256,7 @@ func TestCrashRecoveryDoesNotRepost(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	img := upload(t, s, pngBytes(t, 50, 50, false)).ID
-	p, _ := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}}, "now", now)
+	p, _ := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}}, "now", now)
 
 	sc, fake := newScheduler(s)
 	// 模擬：容器建好、IG 已發佈，但程式在寫回 DB 前當掉（狀態卡在 publishing）
@@ -271,7 +276,7 @@ func TestCrashRecoveryDoesNotRepost(t *testing.T) {
 	}
 
 	// 剛進 publishing（未逾時）不會被別人搶走
-	p2, _ := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}}, "now", now)
+	p2, _ := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}}, "now", now)
 	_, _ = pool.Exec(ctx, `UPDATE scheduled_posts SET status='publishing', locked_at=$2 WHERE id=$1`, p2.ID, now)
 	if done, _ := sc.RunOnce(ctx, now.Add(time.Minute)); !done {
 		t.Fatal("fresh publishing post must not be reclaimed")
@@ -284,7 +289,7 @@ func TestCarousel(t *testing.T) {
 	now := time.Now()
 	a := upload(t, s, pngBytes(t, 50, 50, false)).ID
 	v := upload(t, s, fakeMP4()).ID
-	p, err := s.Save(ctx, Post{Kind: "carousel", MediaIDs: []int64{a, v, a}, Caption: "三張"}, "now", now)
+	p, err := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "carousel", MediaIDs: []int64{a, v, a}, Caption: "三張"}, "now", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,11 +307,84 @@ func TestNoTokenFailsCleanly(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	img := upload(t, s, pngBytes(t, 50, 50, false)).ID
-	p, _ := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img}}, "now", now)
+	p, _ := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img}}, "now", now)
 	sc, _ := newScheduler(s)
-	sc.Token = ""
+	sc.Creds = func(context.Context, int64) (string, string, error) {
+		return "", "", errors.New("這個 IG 帳號尚未連結")
+	}
 	_, _ = sc.RunOnce(ctx, now.Add(time.Second))
-	if got, _ := s.Get(ctx, p.ID); got.Status != "scheduled" || !strings.Contains(got.Error, "尚未連結 IG 帳號") {
+	if got, _ := s.Get(ctx, p.ID); got.Status != "scheduled" || !strings.Contains(got.Error, "尚未連結") {
 		t.Fatalf("no token: %+v", got)
+	}
+}
+
+// 每篇貼文用自己帳號的 token 與 IG 帳號 ID 發佈（不打 /me）；媒體必須屬於貼文的帳號。
+func TestSchedulerPublishesWithPostAccountToken(t *testing.T) {
+	s, pool := setup(t)
+	ctx := context.Background()
+	now := time.Now()
+	acc2 := testdb.ConnectedAccount(t, pool, "acct-2")
+	img1 := upload(t, s, pngBytes(t, 50, 50, false)).ID
+	a2, err := s.Media.Save(ctx, acc2, "b.png", bytes.NewReader(pngBytes(t, 50, 50, false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a2.IGAccountID != acc2 {
+		t.Fatalf("media account %d", a2.IGAccountID)
+	}
+
+	// 媒體不屬於貼文帳號 → 擋（草稿也擋）
+	if _, err := s.Save(ctx, Post{IGAccountID: acc2, Kind: "image", MediaIDs: []int64{img1}}, "now", now); !errors.Is(err, ErrMediaAccount) {
+		t.Fatalf("cross-account media: %v", err)
+	}
+	if _, err := s.Save(ctx, Post{IGAccountID: acc2, Kind: "image", MediaIDs: []int64{img1}}, "draft", now); !errors.Is(err, ErrMediaAccount) {
+		t.Fatalf("cross-account media draft: %v", err)
+	}
+	if _, err := s.Save(ctx, Post{Kind: "image", MediaIDs: []int64{img1}}, "draft", now); !errors.Is(err, ErrNoAccount) {
+		t.Fatalf("no account: %v", err)
+	}
+
+	p1, err := s.Save(ctx, Post{IGAccountID: testAcc, Kind: "image", MediaIDs: []int64{img1}}, "now", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := s.Save(ctx, Post{IGAccountID: acc2, Kind: "image", MediaIDs: []int64{a2.ID}}, "now", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, f := newScheduler(s)
+	for {
+		done, err := sc.RunOnce(ctx, now.Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done {
+			break
+		}
+	}
+	if len(f.Calls) != 2 {
+		t.Fatalf("publish calls %+v", f.Calls)
+	}
+	want := map[int64]ig.PublishCall{p1.ID: {UserID: "acct", Token: "tok-acct"}, p2.ID: {UserID: "acct-2", Token: "tok-acct-2"}}
+	for id, w := range want {
+		got, _ := s.Get(ctx, id)
+		var call *ig.PublishCall
+		for i := range f.Calls {
+			if f.Calls[i].MediaID == got.igMediaID {
+				call = &f.Calls[i]
+			}
+		}
+		if got.Status != "published" || call == nil || call.UserID != w.UserID || call.Token != w.Token {
+			t.Fatalf("post %d published as %+v (status %s), want %+v", id, call, got.Status, w)
+		}
+	}
+
+	// 清單依帳號過濾
+	list, _ := s.List(ctx, ListFilter{Accounts: []int64{acc2}})
+	if len(list) != 1 || list[0].ID != p2.ID {
+		t.Fatalf("filtered list %+v", list)
+	}
+	if n, _ := s.CountUpcoming(ctx, []int64{acc2}); n != 0 {
+		t.Fatalf("upcoming %d", n)
 	}
 }

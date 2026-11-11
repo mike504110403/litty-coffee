@@ -38,9 +38,13 @@ func (s *Server) crmErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) listContacts(w http.ResponseWriter, r *http.Request) {
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
 	tagID, _ := strconv.ParseInt(q.Get("tag"), 10, 64)
-	list, err := s.CRM.List(r.Context(), crm.ListFilter{Q: q.Get("q"), TagID: tagID, Sort: q.Get("sort")})
+	list, err := s.CRM.List(r.Context(), crm.ListFilter{Q: q.Get("q"), TagID: tagID, Sort: q.Get("sort"), Accounts: accounts})
 	if err != nil {
 		s.crmErr(w, err)
 		return
@@ -54,12 +58,21 @@ func (s *Server) getContact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	d, err := s.CRM.Get(r.Context(), id)
+	d, err := s.scopedContact(r, id)
 	if err != nil {
 		s.crmErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// scopedContact 讀顧客；不在登入者可見範圍內一律當作不存在。
+func (s *Server) scopedContact(r *http.Request, id int64) (crm.ContactDetail, error) {
+	d, err := s.CRM.Get(r.Context(), id)
+	if err == nil && !canSee(r, d.IGAccountID) {
+		return d, crm.ErrNotFound
+	}
+	return d, err
 }
 
 func (s *Server) patchContact(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +89,10 @@ func (s *Server) patchContact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if _, err := s.scopedContact(r, id); err != nil {
+		s.crmErr(w, err)
+		return
+	}
 	if err := s.CRM.Update(r.Context(), id, in.Note, in.TagIDs); err != nil {
 		s.crmErr(w, err)
 		return
@@ -83,8 +100,13 @@ func (s *Server) patchContact(w http.ResponseWriter, r *http.Request) {
 	s.getContact(w, r)
 }
 
+// listTags：標籤全店共用，數量只算可見（或 ?account= 指定）帳號的顧客。
 func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
-	list, err := s.CRM.Tags(r.Context())
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.CRM.Tags(r.Context(), accounts)
 	if err != nil {
 		s.crmErr(w, err)
 		return
@@ -148,11 +170,15 @@ func (s *Server) deleteTag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	if days <= 0 || days > 365 {
 		days = 7
 	}
-	sum, err := s.Analytics.Summary(r.Context(), days, time.Now())
+	sum, err := s.Analytics.Summary(r.Context(), days, time.Now(), accounts)
 	if err != nil {
 		log.Printf("analytics: %v", err)
 		writeErr(w, http.StatusInternalServerError, "統計失敗")

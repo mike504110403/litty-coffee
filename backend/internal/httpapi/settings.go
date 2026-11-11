@@ -14,6 +14,7 @@ import (
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
+	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 )
 
 // SystemInfo 是設定頁「串接資訊」要顯示的唯讀設定（不含任何 secret 本體）。
@@ -21,56 +22,84 @@ type SystemInfo struct {
 	WebOrigin     string
 	PublicBaseURL string
 	Timezone      string
+	APIBase       string // Graph API 位址（Unified Login：graph.facebook.com）
 }
 
 const oauthStateCookie = "litty_ig_oauth_state"
 
 func (s *Server) settingsRoutes(r chi.Router) {
 	r.Get("/settings", s.getSettings)
+	// 連線層級（只限可見全部帳號的人）
 	r.Get("/ig/oauth/start", s.igOAuthStart)
 	r.Get("/ig/oauth/callback", s.igOAuthCallback)
-	r.Post("/ig/account/refresh", s.igRefresh)
-	r.Post("/ig/account/subscribe", s.igResubscribe)
-	r.Delete("/ig/account", s.igDisconnect)
-	// /auth/password（所有登入者可用）在 router.go 註冊
+	r.Post("/ig/connections/{id}/refresh", s.igConnRefresh)
+	r.Delete("/ig/connections/{id}", s.igConnDisconnect)
+	// 帳號層級（須在可見範圍內）
+	r.Post("/ig/accounts/{id}/active", s.igAccountActive)
+	r.Post("/ig/accounts/{id}/subscribe", s.igAccountResubscribe)
+	// /auth/password（所有登入者可用）、GET /ig/accounts（所有登入者可用）在 router.go 註冊
 }
 
 func (s *Server) redirectURI() string { return s.Info.WebOrigin + "/api/ig/oauth/callback" }
 
+// visibleAccounts 回登入者看得到的帳號。
+func (s *Server) visibleAccounts(r *http.Request) ([]account.Account, error) {
+	all, err := s.Accounts.List(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	out := []account.Account{}
+	for _, a := range all {
+		if canSee(r, a.ID) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// listAccounts：所有登入者可用（收件匣篩選、自動回覆／排程的帳號選擇器），只回可見帳號。
+func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
+	list, err := s.visibleAccounts(r)
+	if err != nil {
+		log.Printf("accounts: %v", err)
+		writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	var acc *account.Account
-	a, err := s.Accounts.Current(r.Context())
-	switch {
-	case err == nil:
-		acc = &a
-	case !errors.Is(err, account.ErrNotConnected):
+	accounts, err := s.visibleAccounts(r)
+	if err != nil {
 		log.Printf("settings: %v", err)
 		writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
 		return
 	}
+	manage := currentUser(r).AllAccounts()
+	conns := []account.Connection{}
+	if manage {
+		if conns, err = s.Accounts.Connections(r.Context()); err != nil {
+			log.Printf("settings: %v", err)
+			writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account": acc,
+		"accounts":          accounts,
+		"connections":       conns,
+		"manageConnections": manage,
 		"integration": map[string]any{
-			"oauthReady":    s.oauthReady(),
+			"oauthReady":    s.Accounts.OAuthReady(),
 			"webhookUrl":    s.Info.PublicBaseURL + "/webhooks/instagram",
 			"redirectUri":   s.redirectURI(),
 			"publicBaseUrl": s.Info.PublicBaseURL,
 			"envTokenSet":   s.Accounts.FallbackToken != "",
 			"simulator":     s.Fake != nil,
+			"permissions":   ig.Permissions,
+			"apiBase":       s.Info.APIBase,
 		},
 		"timezone": s.Info.Timezone,
 	})
-}
-
-// oauthReady 讀目前生效的 Meta App 憑證（後台存檔即時反映）。
-func (s *Server) oauthReady() bool {
-	if s.Accounts.OAuth == nil {
-		return false
-	}
-	if c, ok := s.Accounts.OAuth.(interface{ Configured() bool }); ok {
-		return c.Configured()
-	}
-	return true
 }
 
 func (s *Server) settingsRedirect(w http.ResponseWriter, r *http.Request, key, val string) {
@@ -82,10 +111,14 @@ func (s *Server) setStateCookie(w http.ResponseWriter, val string, maxAge int) {
 		HttpOnly: true, Secure: s.Auth.Secure, SameSite: http.SameSiteLaxMode})
 }
 
-// igOAuthStart 由前端整頁導向；產生 state 放 cookie 防 CSRF，再轉去 IG 授權頁。
+// igOAuthStart 由前端整頁導向；產生 state 放 cookie 防 CSRF，再轉去 Facebook 登入（Unified Login）授權頁。
 func (s *Server) igOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if !currentUser(r).AllAccounts() {
+		s.settingsRedirect(w, r, "ig_error", "只有可見全部 IG 帳號的管理員能連結帳號")
+		return
+	}
 	if s.Accounts.OAuth == nil {
-		s.settingsRedirect(w, r, "ig_error", "尚未設定 IG_APP_ID／IG_APP_SECRET，無法連結")
+		s.settingsRedirect(w, r, "ig_error", account.ErrNotConfigured.Error())
 		return
 	}
 	b := make([]byte, 16)
@@ -99,10 +132,14 @@ func (s *Server) igOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, err := r.Cookie(oauthStateCookie)
 	s.setStateCookie(w, "", -1)
+	if !currentUser(r).AllAccounts() {
+		s.settingsRedirect(w, r, "ig_error", "只有可見全部 IG 帳號的管理員能連結帳號")
+		return
+	}
 	if q.Get("error") != "" {
 		msg := "已取消授權"
 		if q.Get("error_reason") != "user_denied" {
-			msg = "IG 授權失敗：" + q.Get("error_description")
+			msg = "授權失敗：" + q.Get("error_description")
 		}
 		s.settingsRedirect(w, r, "ig_error", msg)
 		return
@@ -111,45 +148,112 @@ func (s *Server) igOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		s.settingsRedirect(w, r, "ig_error", "授權連結已失效，請重新按「連結 IG 帳號」")
 		return
 	}
-	a, err := s.Accounts.Connect(r.Context(), q.Get("code"))
+	conn, accs, err := s.Accounts.Connect(r.Context(), q.Get("code"))
 	if err != nil {
 		log.Printf("ig oauth: %v", err)
 		s.settingsRedirect(w, r, "ig_error", err.Error())
 		return
 	}
-	log.Printf("ig account connected: @%s (%s)", a.Username, a.IGUserID)
+	for _, a := range accs {
+		log.Printf("ig account connected: @%s (%s) via connection %d", a.Username, a.IGUserID, conn.ID)
+	}
 	s.settingsRedirect(w, r, "ig", "connected")
 }
 
-func (s *Server) accountResult(w http.ResponseWriter, a account.Account, err error) {
-	if errors.Is(err, account.ErrNotConnected) || errors.Is(err, account.ErrTooSoon) {
+func (s *Server) accountErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, account.ErrNotFound), errors.Is(err, account.ErrConnNotFound):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, account.ErrNotConnected), errors.Is(err, account.ErrNotConfigured):
 		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
-	if err != nil {
+	default:
 		writeErr(w, http.StatusBadGateway, err.Error())
+	}
+}
+
+func (s *Server) igConnRefresh(w http.ResponseWriter, r *http.Request) {
+	if !requireAllAccounts(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, a)
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	c, err := s.Accounts.RefreshConnection(r.Context(), id)
+	if err != nil {
+		s.accountErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }
 
-func (s *Server) igRefresh(w http.ResponseWriter, r *http.Request) {
-	a, err := s.Accounts.Refresh(r.Context())
-	s.accountResult(w, a, err)
-}
-
-func (s *Server) igResubscribe(w http.ResponseWriter, r *http.Request) {
-	a, err := s.Accounts.Resubscribe(r.Context())
-	s.accountResult(w, a, err)
-}
-
-func (s *Server) igDisconnect(w http.ResponseWriter, r *http.Request) {
-	if err := s.Accounts.Disconnect(r.Context()); err != nil {
+func (s *Server) igConnDisconnect(w http.ResponseWriter, r *http.Request) {
+	if !requireAllAccounts(w, r) {
+		return
+	}
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.Accounts.Disconnect(r.Context(), id); err != nil {
+		if errors.Is(err, account.ErrConnNotFound) {
+			s.accountErr(w, err)
+			return
+		}
 		log.Printf("ig disconnect: %v", err)
 		writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// scopedAccountID 解析 {id}；不在可見範圍內回 404。
+func scopedAccountID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return 0, false
+	}
+	if !canSee(r, id) {
+		writeErr(w, http.StatusNotFound, account.ErrNotFound.Error())
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *Server) igAccountActive(w http.ResponseWriter, r *http.Request) {
+	id, ok := scopedAccountID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Active *bool `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Active == nil {
+		writeErr(w, http.StatusBadRequest, "請指定 active")
+		return
+	}
+	a, err := s.Accounts.SetActive(r.Context(), id, *in.Active)
+	if err != nil {
+		s.accountErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Server) igAccountResubscribe(w http.ResponseWriter, r *http.Request) {
+	id, ok := scopedAccountID(w, r)
+	if !ok {
+		return
+	}
+	a, err := s.Accounts.Resubscribe(r.Context(), id)
+	if err != nil {
+		s.accountErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
 }
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {

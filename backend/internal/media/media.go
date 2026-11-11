@@ -31,6 +31,7 @@ var ErrNotFound = errors.New("not found")
 
 type Asset struct {
 	ID           int64     `json:"id"`
+	IGAccountID  int64     `json:"igAccountId"` // 上傳時選的 IG 帳號；只能用在該帳號的貼文
 	Filename     string    `json:"filename"`
 	OriginalName string    `json:"originalName"`
 	ContentType  string    `json:"contentType"`
@@ -58,14 +59,14 @@ func randName(ext string) string {
 	return hex.EncodeToString(b) + ext
 }
 
-// Save 驗證並儲存一個上傳檔。PNG 一律轉成 JPEG（IG 圖片只收 JPEG）。
-func (s *Store) Save(ctx context.Context, originalName string, r io.Reader) (Asset, error) {
+// Save 驗證並儲存一個上傳檔（歸屬 accountID）。PNG 一律轉成 JPEG（IG 圖片只收 JPEG）。
+func (s *Store) Save(ctx context.Context, accountID int64, originalName string, r io.Reader) (Asset, error) {
 	data, err := io.ReadAll(io.LimitReader(r, MaxVideoBytes+1))
 	if err != nil {
 		return Asset{}, err
 	}
 	ct := http.DetectContentType(data)
-	a := Asset{OriginalName: filepath.Base(originalName)}
+	a := Asset{IGAccountID: accountID, OriginalName: filepath.Base(originalName)}
 	switch {
 	case ct == "image/jpeg" || ct == "image/png":
 		img, _, err := image.Decode(bytes.NewReader(data))
@@ -107,9 +108,12 @@ func (s *Store) Save(ctx context.Context, originalName string, r io.Reader) (Ass
 		return a, err
 	}
 	err = s.DB.QueryRow(ctx, `
-INSERT INTO media_assets (filename, original_name, content_type, kind, size_bytes, width, height)
-VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
-		a.Filename, a.OriginalName, a.ContentType, a.Kind, a.SizeBytes, a.Width, a.Height).Scan(&a.ID, &a.CreatedAt)
+INSERT INTO media_assets (filename, original_name, content_type, kind, size_bytes, width, height, ig_account_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
+		a.Filename, a.OriginalName, a.ContentType, a.Kind, a.SizeBytes, a.Width, a.Height, accountID).Scan(&a.ID, &a.CreatedAt)
+	if err != nil {
+		_ = os.Remove(filepath.Join(s.Dir, a.Filename))
+	}
 	a.URL = "/media/" + a.Filename
 	return a, err
 }
@@ -142,7 +146,7 @@ func (c rgba16) RGBA() (uint32, uint32, uint32, uint32) { return c.r, c.g, c.b, 
 
 func (s *Store) Get(ctx context.Context, ids []int64) ([]Asset, error) {
 	rows, err := s.DB.Query(ctx, `
-SELECT id, filename, original_name, content_type, kind, size_bytes, width, height, created_at
+SELECT id, ig_account_id, filename, original_name, content_type, kind, size_bytes, width, height, created_at
 FROM media_assets WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
@@ -151,7 +155,7 @@ FROM media_assets WHERE id = ANY($1)`, ids)
 	byID := map[int64]Asset{}
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.Filename, &a.OriginalName, &a.ContentType, &a.Kind, &a.SizeBytes, &a.Width, &a.Height, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.IGAccountID, &a.Filename, &a.OriginalName, &a.ContentType, &a.Kind, &a.SizeBytes, &a.Width, &a.Height, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.URL = "/media/" + a.Filename

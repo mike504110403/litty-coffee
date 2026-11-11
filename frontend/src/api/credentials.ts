@@ -1,7 +1,14 @@
 import { http } from './http'
 
-// 後台「串接憑證」：IG Meta App 與 Claude AI。DB 值優先於 .env，存檔立即生效，不用重啟。
-export type CredentialKey = 'igAppId' | 'igAppSecret' | 'igVerifyToken' | 'anthropicApiKey' | 'aiModel' | 'aiEffort'
+// 後台「串接憑證」：Meta App（Unified Login：App ID／Secret＋配置 ID）與 Claude AI。DB 值優先於 .env，存檔立即生效，不用重啟。
+export type CredentialKey =
+  | 'igAppId'
+  | 'igAppSecret'
+  | 'igConfigId'
+  | 'igVerifyToken'
+  | 'anthropicApiKey'
+  | 'aiModel'
+  | 'aiEffort'
 export type CredentialSource = 'db' | 'env' | 'none'
 
 export interface CredentialField {

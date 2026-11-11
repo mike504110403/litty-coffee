@@ -26,12 +26,13 @@ func (s *Service) send(ctx context.Context, convID int64, text, senderType strin
 	if text == "" {
 		return Message{}, ErrEmptyText
 	}
-	var accountIGID, token, igsid string
+	var accountID int64
+	var igsid string
 	var lastInbound *time.Time
 	err := s.DB.QueryRow(ctx, `
-SELECT a.ig_user_id, a.access_token, ct.igsid, c.last_inbound_at
-FROM conversations c JOIN contacts ct ON ct.id = c.contact_id JOIN ig_accounts a ON a.id = ct.ig_account_id
-WHERE c.id = $1`, convID).Scan(&accountIGID, &token, &igsid, &lastInbound)
+SELECT ct.ig_account_id, ct.igsid, c.last_inbound_at
+FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
+WHERE c.id = $1`, convID).Scan(&accountID, &igsid, &lastInbound)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Message{}, ErrNotFound
 	}
@@ -44,16 +45,19 @@ WHERE c.id = $1`, convID).Scan(&accountIGID, &token, &igsid, &lastInbound)
 		return Message{}, err
 	}
 
-	if token == "" {
-		token = s.DefaultToken
+	// 從對話所屬帳號送出，用該帳號連線的 token
+	accountIGID, token, err := s.credentials(ctx, accountID)
+	if err != nil {
+		return Message{}, fmt.Errorf("%w：%v", ErrCannotSend, err)
 	}
 	mid, err := s.IG.SendText(ctx, accountIGID, token, igsid, text, humanAgent)
 	if err != nil {
+		s.noteAPIError(ctx, accountID, err)
 		return Message{}, fmt.Errorf("IG 送出失敗：%w", err)
 	}
 
 	now := time.Now()
-	m := Message{ConversationID: convID, Direction: "out", SenderType: senderType, Kind: "text", Text: text}
+	m := Message{ConversationID: convID, IGAccountID: accountID, Direction: "out", SenderType: senderType, Kind: "text", Text: text}
 	var sentBy *int64
 	if adminID > 0 {
 		sentBy = &adminID

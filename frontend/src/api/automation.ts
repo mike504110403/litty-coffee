@@ -64,26 +64,36 @@ export const matchTypeLabels: Record<MatchType, string> = {
   regex: '正則',
 }
 
+// 設定、規則、知識庫都依 IG 帳號區分：除了 status，每個呼叫都帶 ?account=
+const acc = (account: number) => ({ params: { account } })
+
 export const automationApi = {
   status: () => http.get<{ aiConfigured: boolean; model: string }>('/automation/status').then((r) => r.data),
-  settings: () => http.get<AutoSettings>('/automation/settings').then((r) => r.data),
-  saveSettings: (s: AutoSettings) => http.put<AutoSettings>('/automation/settings', s).then((r) => r.data),
+  settings: (account: number) => http.get<AutoSettings>('/automation/settings', acc(account)).then((r) => r.data),
+  saveSettings: (account: number, s: AutoSettings) =>
+    http.put<AutoSettings>('/automation/settings', s, acc(account)).then((r) => r.data),
 
-  rules: () => http.get<Rule[]>('/automation/rules').then((r) => r.data),
-  createRule: (r: Omit<Rule, 'id' | 'hitCount' | 'lastHitAt'>) =>
-    http.post<Rule>('/automation/rules', r).then((res) => res.data),
-  updateRule: (r: Rule) => http.put<Rule>(`/automation/rules/${r.id}`, r).then((res) => res.data),
-  deleteRule: (id: number) => http.delete(`/automation/rules/${id}`),
+  rules: (account: number) => http.get<Rule[]>('/automation/rules', acc(account)).then((r) => r.data),
+  createRule: (account: number, r: Omit<Rule, 'id' | 'hitCount' | 'lastHitAt'>) =>
+    http.post<Rule>('/automation/rules', r, acc(account)).then((res) => res.data),
+  updateRule: (account: number, r: Rule) =>
+    http.put<Rule>(`/automation/rules/${r.id}`, r, acc(account)).then((res) => res.data),
+  deleteRule: (account: number, id: number) => http.delete(`/automation/rules/${id}`, acc(account)),
 
-  knowledge: () => http.get<Knowledge[]>('/automation/knowledge').then((r) => r.data),
-  saveKnowledge: (k: Partial<Knowledge> & { title: string }) =>
-    (k.id ? http.put<Knowledge>(`/automation/knowledge/${k.id}`, k) : http.post<Knowledge>('/automation/knowledge', k)).then(
-      (r) => r.data,
-    ),
-  deleteKnowledge: (id: number) => http.delete(`/automation/knowledge/${id}`),
+  knowledge: (account: number) => http.get<Knowledge[]>('/automation/knowledge', acc(account)).then((r) => r.data),
+  saveKnowledge: (account: number, k: Partial<Knowledge> & { title: string }) =>
+    (k.id
+      ? http.put<Knowledge>(`/automation/knowledge/${k.id}`, k, acc(account))
+      : http.post<Knowledge>('/automation/knowledge', k, acc(account))
+    ).then((r) => r.data),
+  deleteKnowledge: (account: number, id: number) => http.delete(`/automation/knowledge/${id}`, acc(account)),
 
-  test: (text: string, history: { fromCustomer: boolean; text: string }[] = []) =>
+  test: (account: number, text: string, history: { fromCustomer: boolean; text: string }[] = []) =>
     http
-      .post<{ outcome: Outcome; elapsedMs: number }>('/automation/test', { text, history }, { timeout: 60000 })
+      .post<{ outcome: Outcome; elapsedMs: number }>(
+        '/automation/test',
+        { text, history },
+        { timeout: 60000, params: { account } },
+      )
       .then((r) => r.data),
 }

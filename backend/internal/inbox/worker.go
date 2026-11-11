@@ -54,22 +54,26 @@ ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &raw)
 	}
 
 	// 用 savepoint 隔開：領域寫入失敗時仍要把事件標成已處理＋記錯誤（可清 processed_at 重播）
+	var rejected string
 	results, perr := func() ([]ingested, error) {
 		sp, err := tx.Begin(ctx)
 		if err != nil {
 			return nil, err
 		}
-		res, err := processPayload(ctx, sp, raw)
+		res, rej, err := processPayload(ctx, sp, raw)
 		if err != nil {
 			_ = sp.Rollback(ctx)
 			return nil, err
 		}
+		rejected = rej
 		return res, sp.Commit(ctx)
 	}()
-	errText := ""
+	errText := rejected
 	if perr != nil {
 		errText = perr.Error()
 		log.Printf("inbox: event %d failed: %v", id, perr)
+	} else if rejected != "" {
+		log.Printf("inbox: event %d: %s", id, rejected)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE webhook_events SET processed_at = now(), error = $2 WHERE id = $1`, id, errText); err != nil {
 		return true, err
@@ -99,7 +103,7 @@ ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &raw)
 			r.msg = s.saveMedia(ctx, r.msg, src)
 		}
 		if r.needsProf {
-			s.fillProfile(ctx, r.contactID, r.token, r.igsid)
+			s.fillProfile(ctx, r.contactID, r.accountID, r.igsid)
 		}
 		s.publishMessage(r.msg)
 		if c, err := s.GetConversation(ctx, r.convID); err == nil {

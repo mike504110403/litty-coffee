@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -20,7 +21,22 @@ var (
 	ErrNotFound     = errors.New("conversation not found")
 	ErrWindowClosed = errors.New("已超過 IG 回覆窗口，需等顧客再傳訊息才能回覆")
 	ErrEmptyText    = errors.New("訊息不能是空的")
+	// ErrCannotSend 包住「這個帳號現在不能送」的原因（停用、未連結、授權過期）
+	ErrCannotSend = errors.New("無法從這個 IG 帳號送出")
 )
+
+// UnconnectedAccount 是未連結（不在 ig_accounts、停用或沒掛連線）帳號的 webhook 事件錯誤訊息。
+const UnconnectedAccount = "未連結的帳號"
+
+// Credentials 回某帳號（ig_accounts.id）發 API 用的 IG 帳號 ID 與 token；正式環境是 account.Service.Credentials。
+type Credentials interface {
+	Credentials(ctx context.Context, accountID int64) (igUserID, token string, err error)
+}
+
+// APIErrorNoter 選配：Credentials 若也實作它，IG API 錯誤會回報（token 失效時記在連線上）。
+type APIErrorNoter interface {
+	NoteAPIError(ctx context.Context, accountID int64, err error)
+}
 
 // InboundHook 在收到顧客新訊息（已落庫）後被呼叫；自動回覆在這裡接。
 type InboundHook func(conversationID int64, msg Message)
@@ -30,7 +46,8 @@ type Service struct {
 	IG           ig.Messenger
 	Hub          *realtime.Hub
 	OnInbound    InboundHook
-	DefaultToken string // ig_accounts 沒存 token 時用（env IG_ACCESS_TOKEN）
+	Creds        Credentials // 每個帳號用自己連線的 token；nil 時用 DefaultToken（測試）
+	DefaultToken string
 	MediaDir     string // 收到的附件存到 MediaDir/inbox/（IG 的 CDN 網址會過期）
 	Download     *http.Client
 	wake         chan struct{}
@@ -58,12 +75,14 @@ type Conversation struct {
 	LastMessageText string     `json:"lastMessageText"`
 	WindowExpiresAt *time.Time `json:"windowExpiresAt"` // 24h 標準窗口
 	ContactReadAt   *time.Time `json:"contactReadAt"`   // 顧客最後已讀時間（之前送出的訊息都算已讀）
+	IGAccountID     int64      `json:"igAccountId"`     // 這段對話屬於哪個我方 IG 帳號
 	Contact         Contact    `json:"contact"`
 }
 
 type Message struct {
 	ID             int64     `json:"id"`
 	ConversationID int64     `json:"conversationId"`
+	IGAccountID    int64     `json:"igAccountId"`
 	Direction      string    `json:"direction"`  // in | out
 	SenderType     string    `json:"senderType"` // contact | bot | ai | human
 	Kind           string    `json:"kind"`
@@ -82,13 +101,31 @@ type Sender struct {
 }
 
 func (s *Service) publishMessage(m Message) {
-	s.Hub.Publish(realtime.Event{Type: "message.created", Data: m})
+	s.Hub.Publish(realtime.Event{Type: "message.created", Data: m, AccountID: m.IGAccountID})
 }
 
 func (s *Service) publishMessageUpdated(m Message) {
-	s.Hub.Publish(realtime.Event{Type: "message.updated", Data: m})
+	s.Hub.Publish(realtime.Event{Type: "message.updated", Data: m, AccountID: m.IGAccountID})
 }
 
 func (s *Service) publishConversation(c Conversation) {
-	s.Hub.Publish(realtime.Event{Type: "conversation.updated", Data: c})
+	s.Hub.Publish(realtime.Event{Type: "conversation.updated", Data: c, AccountID: c.IGAccountID})
+}
+
+// credentials 取某帳號的 (IG 帳號 ID, token)。
+func (s *Service) credentials(ctx context.Context, accountID int64) (string, string, error) {
+	if s.Creds != nil {
+		return s.Creds.Credentials(ctx, accountID)
+	}
+	var igUserID string
+	if err := s.DB.QueryRow(ctx, `SELECT ig_user_id FROM ig_accounts WHERE id = $1`, accountID).Scan(&igUserID); err != nil {
+		return "", "", err
+	}
+	return igUserID, s.DefaultToken, nil
+}
+
+func (s *Service) noteAPIError(ctx context.Context, accountID int64, err error) {
+	if n, ok := s.Creds.(APIErrorNoter); ok {
+		n.NoteAPIError(ctx, accountID, err)
+	}
 }

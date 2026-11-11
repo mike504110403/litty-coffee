@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { http } from '@/api/http'
+import { useAccountsStore } from './accounts'
 
 // 功能權限鍵；後端（auth.AllPerms）是唯一來源，這裡只是型別
 export type Perm =
@@ -42,6 +43,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     const { data } = await http.post<AdminUser>('/auth/login', { username, password })
+    useAccountsStore().reset() // 可見帳號依登入者而異
     user.value = data
     checked.value = true
   }
@@ -49,6 +51,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     await http.post('/auth/logout')
     user.value = null
+    useAccountsStore().reset()
   }
 
   // 沒指定權限＝所有登入者都可用

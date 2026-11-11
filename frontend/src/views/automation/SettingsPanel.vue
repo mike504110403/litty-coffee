@@ -3,20 +3,20 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { automationApi, type AutoSettings } from '@/api/automation'
 
-defineProps<{ aiConfigured: boolean }>()
+const props = defineProps<{ aiConfigured: boolean; accountId: number }>()
 
 const form = ref<AutoSettings | null>(null)
 const saving = ref(false)
 
 onMounted(async () => {
-  form.value = await automationApi.settings()
+  form.value = await automationApi.settings(props.accountId)
 })
 
 async function save() {
   if (!form.value) return
   saving.value = true
   try {
-    form.value = await automationApi.saveSettings(form.value)
+    form.value = await automationApi.saveSettings(props.accountId, form.value)
     ElMessage.success('已儲存')
   } finally {
     saving.value = false

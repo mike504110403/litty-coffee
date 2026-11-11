@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import { devApi } from '@/api/inbox'
 import { useInboxStore } from '@/stores/inbox'
 import { useAuthStore } from '@/stores/auth'
+import { useAccountsStore } from '@/stores/accounts'
 import ConversationList from './ConversationList.vue'
 import ChatThread from './ChatThread.vue'
 import SimulatorDialog from './SimulatorDialog.vue'
@@ -14,7 +15,8 @@ import ContactDrawer from '@/components/ContactDrawer.vue'
 const route = useRoute()
 const router = useRouter()
 const store = useInboxStore()
-const { conversations, active, loading, messages, hasMore } = storeToRefs(store)
+const { conversations, active, loading, messages, hasMore, accountFilter } = storeToRefs(store)
+const accounts = useAccountsStore()
 
 const routeId = computed(() => {
   const n = Number(route.params.id)
@@ -29,6 +31,7 @@ const simulator = ref(false)
 const showSim = ref(false)
 
 onMounted(async () => {
+  void accounts.ensure()
   void store.fetchConversations()
   try {
     simulator.value = (await devApi.status()).simulator
@@ -56,6 +59,8 @@ async function send(text: string) {
         :conversations="conversations"
         :active-id="routeId"
         :loading="loading"
+        :account="accountFilter"
+        @update:account="store.setAccountFilter"
         @select="select"
         @search="(q) => store.fetchConversations(q)"
       />

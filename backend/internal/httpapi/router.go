@@ -66,6 +66,7 @@ func (s *Server) Routes() http.Handler {
 			// 所有登入者都可用
 			r.Get("/auth/me", s.me)
 			r.Post("/auth/password", s.changePassword)
+			r.Get("/ig/accounts", s.listAccounts) // 可見的 IG 帳號（各頁的帳號篩選／選擇器）
 			// 各功能依權限把關（權限鍵見 auth.AllPerms）
 			perm := func(p string) chi.Router { return r.With(auth.RequirePerm(p)) }
 			s.inboxRoutes(perm(auth.PermInbox))

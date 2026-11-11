@@ -22,7 +22,6 @@ type ContainerSpec struct {
 
 // Publisher 抽象 IG 內容發佈 API（Content Publishing）。
 type Publisher interface {
-	UserID(ctx context.Context, token string) (string, error)
 	CreateContainer(ctx context.Context, userID, token string, spec ContainerSpec) (string, error)
 	ContainerStatus(ctx context.Context, token, containerID string) (string, error) // IN_PROGRESS | FINISHED | PUBLISHED | ERROR | EXPIRED
 	Publish(ctx context.Context, userID, token, containerID string) (mediaID string, err error)
@@ -32,7 +31,7 @@ type Publisher interface {
 }
 
 // InsightMetrics 回傳各貼文類型向 GET /{ig-media-id}/insights 請求的 metric。
-// 來源：Instagram Platform「IG Media Insights」參考頁（Instagram Login 用 graph.instagram.com）。
+// 來源：Instagram Platform「IG Media Insights」參考頁（Unified Login 走 graph.facebook.com，路徑相同）。
 //   - FEED（image、carousel）：views、reach、likes、comments、saved、shares（impressions 對 2024-07-02 後的媒體已棄用，不用）
 //   - REELS：同上六項（Reels 的 plays 等舊 metric 已由 views 取代）
 //   - STORY：views、reach、replies、shares（無 likes／comments／saved；限動只在 24 小時內查得到）
@@ -43,20 +42,6 @@ func InsightMetrics(kind string) []string {
 		return []string{"views", "reach", "replies", "shares"}
 	}
 	return []string{"views", "reach", "likes", "comments", "saved", "shares"}
-}
-
-func (c *Client) UserID(ctx context.Context, token string) (string, error) {
-	var out struct {
-		UserID string `json:"user_id"`
-		ID     string `json:"id"`
-	}
-	if err := c.do(ctx, http.MethodGet, c.Base+"/me?fields=user_id,username", token, nil, &out); err != nil {
-		return "", err
-	}
-	if out.UserID != "" {
-		return out.UserID, nil
-	}
-	return out.ID, nil
 }
 
 func (c *Client) CreateContainer(ctx context.Context, userID, token string, s ContainerSpec) (string, error) {
@@ -149,14 +134,17 @@ type FakePublisher struct {
 
 	InsightsFail  map[string]bool // 測試用：這些 mediaID 的 Insights 回錯誤
 	InsightsCalls map[string]int  // 每個 mediaID 被查詢的次數
+
+	Calls        []PublishCall     // 每次 Publish 用的帳號與 token（測試驗證用對帳號）
+	InsightToken map[string]string // mediaID → 最後一次查成效用的 token
 }
+
+// PublishCall 是 FakePublisher 收到的一次發佈。
+type PublishCall struct{ UserID, Token, MediaID string }
 
 func NewFakePublisher() *FakePublisher {
-	return &FakePublisher{status: map[string]string{}, InsightsFail: map[string]bool{}, InsightsCalls: map[string]int{}}
-}
-
-func (f *FakePublisher) UserID(context.Context, string) (string, error) {
-	return "dev-litty-coffee", nil
+	return &FakePublisher{status: map[string]string{}, InsightsFail: map[string]bool{}, InsightsCalls: map[string]int{},
+		InsightToken: map[string]string{}}
 }
 
 func (f *FakePublisher) CreateContainer(_ context.Context, _, _ string, s ContainerSpec) (string, error) {
@@ -179,7 +167,7 @@ func (f *FakePublisher) ContainerStatus(_ context.Context, _, id string) (string
 	return "EXPIRED", nil
 }
 
-func (f *FakePublisher) Publish(_ context.Context, _, _, id string) (string, error) {
+func (f *FakePublisher) Publish(_ context.Context, userID, token, id string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FailNext > 0 {
@@ -189,7 +177,9 @@ func (f *FakePublisher) Publish(_ context.Context, _, _, id string) (string, err
 	time.Sleep(300 * time.Millisecond)
 	f.status[id] = "PUBLISHED"
 	f.Published++
-	return "dev-media-" + randHex(6), nil
+	mid := "dev-media-" + randHex(6)
+	f.Calls = append(f.Calls, PublishCall{UserID: userID, Token: token, MediaID: mid})
+	return mid, nil
 }
 
 func (f *FakePublisher) Permalink(_ context.Context, _, mediaID string) (string, error) {
@@ -197,10 +187,11 @@ func (f *FakePublisher) Permalink(_ context.Context, _, mediaID string) (string,
 }
 
 // Insights 回傳依 mediaID 決定的假數據；每多查一次 views 就多一點，方便在畫面上看到「更新」有效。
-func (f *FakePublisher) Insights(_ context.Context, _, mediaID, kind string) (map[string]int64, error) {
+func (f *FakePublisher) Insights(_ context.Context, token, mediaID, kind string) (map[string]int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.InsightsCalls[mediaID]++
+	f.InsightToken[mediaID] = token
 	if f.InsightsFail[mediaID] {
 		return nil, fmt.Errorf("instagram api 400: insights unavailable (code 10)")
 	}

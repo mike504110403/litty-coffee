@@ -6,6 +6,9 @@ import { automationApi, matchTypeLabels, type MatchType, type Rule } from '@/api
 import { useIsMobile } from '@/composables/useIsMobile'
 import { shortTime } from '@/utils/time'
 
+// 編輯的是這個 IG 帳號的資料（父層切換帳號時以 key 重建本元件）
+const props = defineProps<{ accountId: number }>()
+
 const isMobile = useIsMobile()
 const rules = ref<Rule[]>([])
 const loading = ref(true)
@@ -13,7 +16,7 @@ const loading = ref(true)
 async function load() {
   loading.value = true
   try {
-    rules.value = await automationApi.rules()
+    rules.value = await automationApi.rules(props.accountId)
   } finally {
     loading.value = false
   }
@@ -55,9 +58,9 @@ async function save() {
   saving.value = true
   try {
     if (form.id) {
-      await automationApi.updateRule({ ...form, hitCount: 0, lastHitAt: null })
+      await automationApi.updateRule(props.accountId, { ...form, hitCount: 0, lastHitAt: null })
     } else {
-      await automationApi.createRule(form)
+      await automationApi.createRule(props.accountId, form)
     }
     ElMessage.success('已儲存')
     dialog.value = false
@@ -68,12 +71,12 @@ async function save() {
 }
 
 async function toggle(r: Rule) {
-  await automationApi.updateRule(r)
+  await automationApi.updateRule(props.accountId, r)
 }
 
 async function remove(r: Rule) {
   if (!(await ElMessageBox.confirm(`刪除規則「${r.name}」？`, '刪除規則', { type: 'warning', confirmButtonText: '刪除', cancelButtonText: '取消' }).catch(() => false))) return
-  await automationApi.deleteRule(r.id)
+  await automationApi.deleteRule(props.accountId, r.id)
   rules.value = rules.value.filter((x) => x.id !== r.id)
 }
 

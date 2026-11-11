@@ -28,28 +28,32 @@ type Service struct {
 }
 
 type User struct {
-	ID          int64      `json:"id"`
-	Username    string     `json:"username"`
-	DisplayName string     `json:"displayName"`
-	IsOwner     bool       `json:"isOwner"`
-	Permissions []string   `json:"permissions"` // 有效權限：店長回完整清單
-	Disabled    bool       `json:"disabled"`
-	LastLoginAt *time.Time `json:"lastLoginAt"`
-	CreatedAt   time.Time  `json:"createdAt"`
+	ID          int64    `json:"id"`
+	Username    string   `json:"username"`
+	DisplayName string   `json:"displayName"`
+	IsOwner     bool     `json:"isOwner"`
+	Permissions []string `json:"permissions"` // 有效權限：店長回完整清單
+	// IGAccountIDs 是可見的 IG 帳號（ig_accounts.id）；nil＝全部（店長一律 nil）。見 scope.go
+	IGAccountIDs []int64    `json:"igAccountIds"`
+	Disabled     bool       `json:"disabled"`
+	LastLoginAt  *time.Time `json:"lastLoginAt"`
+	CreatedAt    time.Time  `json:"createdAt"`
 }
 
-const userCols = `id, username, display_name, is_owner, permissions, disabled_at, last_login_at, created_at`
+const userCols = `id, username, display_name, is_owner, permissions, disabled_at, last_login_at, created_at, ig_account_ids`
 
 func scanUser(row pgx.Row, extra ...any) (User, error) {
 	var u User
 	var disabled *time.Time
 	err := row.Scan(append([]any{&u.ID, &u.Username, &u.DisplayName, &u.IsOwner, &u.Permissions, &disabled,
-		&u.LastLoginAt, &u.CreatedAt}, extra...)...)
+		&u.LastLoginAt, &u.CreatedAt, &u.IGAccountIDs}, extra...)...)
 	u.Disabled = disabled != nil
 	if u.IsOwner {
 		u.Permissions = append([]string{}, AllPerms...)
+		u.IGAccountIDs = nil
 	} else {
 		u.Permissions = normalizePerms(u.Permissions)
+		u.IGAccountIDs = normalizeAccounts(u.IGAccountIDs)
 	}
 	return u, err
 }

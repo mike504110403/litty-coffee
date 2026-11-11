@@ -36,6 +36,8 @@ type AdminInput struct {
 	Password    string   `json:"password"`
 	IsOwner     bool     `json:"isOwner"`
 	Permissions []string `json:"permissions"`
+	// IGAccountIDs 可見 IG 帳號；省略或空＝全部
+	IGAccountIDs []int64 `json:"igAccountIds"`
 }
 
 // AdminPatch 只更新非 nil 的欄位。
@@ -44,6 +46,8 @@ type AdminPatch struct {
 	IsOwner     *bool     `json:"isOwner"`
 	Permissions *[]string `json:"permissions"`
 	Disabled    *bool     `json:"disabled"`
+	// IGAccountIDs 可見 IG 帳號；nil＝不動，[]＝全部
+	IGAccountIDs *[]int64 `json:"igAccountIds"`
 }
 
 func (s *Service) ListAdmins(ctx context.Context) ([]User, error) {
@@ -110,6 +114,18 @@ func (s *Service) CreateAdmin(ctx context.Context, actor User, in AdminInput) (U
 			return User{}, err
 		}
 	}
+	accounts := normalizeAccounts(in.IGAccountIDs)
+	if in.IsOwner {
+		accounts = nil
+	}
+	if !in.IsOwner {
+		if err := checkAccountGrant(actor, accounts); err != nil {
+			return User{}, err
+		}
+	}
+	if err := s.checkAccountsExist(ctx, accounts); err != nil {
+		return User{}, err
+	}
 	name := strings.TrimSpace(in.DisplayName)
 	if name == "" {
 		name = in.Username
@@ -119,8 +135,8 @@ func (s *Service) CreateAdmin(ctx context.Context, actor User, in AdminInput) (U
 		return User{}, err
 	}
 	u, err := scanUser(s.DB.QueryRow(ctx, `
-INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions)
-VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols, in.Username, string(hash), name, in.IsOwner, perms))
+INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions, ig_account_ids)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userCols, in.Username, string(hash), name, in.IsOwner, perms, accounts))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return User{}, ErrUsernameTaken
@@ -132,6 +148,7 @@ VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols, in.Username, string(hash), nam
 //   - 非店長不能動店長帳號、不能變更任何人的店長身分、不能授予自己沒有的權限
 //   - 不能停用自己、不能拿掉自己的「管理員」權限
 //   - 最後一位啟用中的店長不能被停用或降級
+//   - 只能看部分 IG 帳號的人只能授予自己看得到的帳號，不能授予「全部」
 func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p AdminPatch) (User, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -149,8 +166,10 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 		return User{}, err
 	}
 
-	var stored []string // 原始存的權限（店長的有效權限是全部，降級時以此為基礎）
-	target, err := scanUser(tx.QueryRow(ctx, `SELECT `+userCols+`, permissions FROM admin_users WHERE id = $1 FOR UPDATE`, id), &stored)
+	var stored []string        // 原始存的權限（店長的有效權限是全部，降級時以此為基礎）
+	var storedAccounts []int64 // 原始存的可見帳號（同上）
+	target, err := scanUser(tx.QueryRow(ctx, `SELECT `+userCols+`, permissions, ig_account_ids FROM admin_users WHERE id = $1 FOR UPDATE`, id),
+		&stored, &storedAccounts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
@@ -186,6 +205,21 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 			}
 		}
 	}
+	newAccounts := normalizeAccounts(storedAccounts)
+	if p.IGAccountIDs != nil {
+		newAccounts = normalizeAccounts(*p.IGAccountIDs)
+		if !slices.Equal(newAccounts, target.IGAccountIDs) || target.IsOwner {
+			if err := checkAccountGrant(actor, newAccounts); err != nil {
+				return User{}, err
+			}
+		}
+		if err := s.checkAccountsExist(ctx, newAccounts); err != nil {
+			return User{}, err
+		}
+	}
+	if newOwner {
+		newAccounts = nil
+	}
 	newDisabled := target.Disabled
 	if p.Disabled != nil {
 		newDisabled = *p.Disabled
@@ -220,8 +254,8 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 
 	u, err := scanUser(tx.QueryRow(ctx, `
 UPDATE admin_users SET display_name = $2, is_owner = $3, permissions = $4,
-  disabled_at = CASE WHEN NOT $5 THEN NULL ELSE COALESCE(disabled_at, now()) END
-WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled))
+  disabled_at = CASE WHEN NOT $5 THEN NULL ELSE COALESCE(disabled_at, now()) END, ig_account_ids = $6
+WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled, newAccounts))
 	if err != nil {
 		return User{}, err
 	}

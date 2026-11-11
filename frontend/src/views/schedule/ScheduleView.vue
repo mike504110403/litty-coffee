@@ -7,6 +7,9 @@ import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import PostComposer from './PostComposer.vue'
 import PostInsights from './PostInsights.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import AccountTag from '@/components/AccountTag.vue'
+import { useAccountsStore } from '@/stores/accounts'
 
 const isMobile = useIsMobile()
 const view = ref<'calendar' | 'list'>(isMobile.value ? 'list' : 'calendar')
@@ -36,6 +39,10 @@ const isToday = (d: Date) => dayKey(d) === dayKey(today)
 // ---- 資料 ----
 const posts = ref<Post[]>([])
 const loading = ref(false)
+// 帳號篩選（null＝全部帳號）
+const accounts = useAccountsStore()
+const accountFilter = ref<number | null>(null)
+onMounted(() => void accounts.ensure())
 
 async function load() {
   loading.value = true
@@ -43,17 +50,21 @@ async function load() {
     if (view.value === 'calendar') {
       const end = new Date(gridStart.value)
       end.setDate(end.getDate() + 42)
-      posts.value = await postsApi.list({ from: gridStart.value.toISOString(), to: end.toISOString() })
+      posts.value = await postsApi.list({
+        from: gridStart.value.toISOString(),
+        to: end.toISOString(),
+        account: accountFilter.value ?? undefined,
+      })
     } else {
       const from = new Date()
       from.setDate(from.getDate() - 14)
-      posts.value = await postsApi.list({ from: from.toISOString() })
+      posts.value = await postsApi.list({ from: from.toISOString(), account: accountFilter.value ?? undefined })
     }
   } finally {
     loading.value = false
   }
 }
-watch([month, view], load)
+watch([month, view, accountFilter], load)
 onMounted(load)
 
 // 有發佈中或快到期的貼文時輪詢，狀態會自己更新
@@ -109,7 +120,7 @@ const auth = useAuthStore()
 onMounted(async () => {
   if (!auth.can('analytics')) return // 熱門時段來自分析資料
   try {
-    const s = await crmApi.summary(30)
+    const s = await crmApi.summary(30, accountFilter.value ?? undefined)
     bestHours.value = s.hours
       .map((n, h) => ({ n, h }))
       .filter((x) => x.n > 0)
@@ -156,6 +167,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
         <p class="lc-page-sub">規劃 IG 貼文、輪播、Reels 與限動，時間到自動發佈</p>
       </div>
       <div class="controls">
+        <AccountSelect v-if="accounts.multi" v-model="accountFilter" allow-all class="acc-filter" />
         <el-segmented
           v-model="view"
           :options="[
@@ -173,6 +185,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
         <img v-if="p.media[0]?.kind === 'image'" :src="p.media[0].url" alt="" />
         <span v-else class="ph">{{ kindLabels[p.kind] }}</span>
         <span class="cap">{{ p.caption || '（無文案）' }}</span>
+        <AccountTag v-if="accounts.multi" :id="p.igAccountId" compact />
       </button>
     </div>
 
@@ -201,13 +214,14 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
             :key="p.id"
             class="chip"
             :class="p.status"
-            :title="`${hhmm(p.scheduledAt!)} ${kindLabels[p.kind]} · ${statusLabels[p.status]}`"
+            :title="`${hhmm(p.scheduledAt!)} ${kindLabels[p.kind]} · ${statusLabels[p.status]} · ${accounts.label(p.igAccountId)}`"
             @click.stop="openPost(p)"
           >
             <img v-if="p.media[0]?.kind === 'image'" :src="p.media[0].url" alt="" />
             <el-icon class="st" :class="{ spin: p.status === 'publishing' }"><component :is="statusIcon[p.status]" /></el-icon>
             <span class="t">{{ hhmm(p.scheduledAt!) }}</span>
             <span class="k">{{ kindLabels[p.kind] }}</span>
+            <AccountTag v-if="accounts.multi" :id="p.igAccountId" compact class="acc" />
           </button>
         </div>
       </div>
@@ -234,6 +248,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
             <div class="ag-top">
               <span class="ag-time">{{ hhmm(p.scheduledAt!) }}</span>
               <span class="ag-kind">{{ kindLabels[p.kind] }}<template v-if="p.kind === 'carousel'"> · {{ p.media.length }} 張</template></span>
+              <AccountTag v-if="accounts.multi" :id="p.igAccountId" />
               <span class="badge" :class="p.status">
                 <el-icon :class="{ spin: p.status === 'publishing' }"><component :is="statusIcon[p.status]" /></el-icon>
                 {{ statusLabels[p.status] }}
@@ -250,7 +265,15 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
       </el-empty>
     </div>
 
-    <PostComposer v-model="composerOpen" :post="editing" :default-date="defaultDate" :best-hours="bestHours" @saved="load" @insights-updated="onInsightsUpdated" />
+    <PostComposer
+      v-model="composerOpen"
+      :post="editing"
+      :default-date="defaultDate"
+      :default-account="accountFilter"
+      :best-hours="bestHours"
+      @saved="load"
+      @insights-updated="onInsightsUpdated"
+    />
   </div>
 </template>
 
@@ -557,5 +580,11 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
       display: none;
     }
   }
+}
+.acc-filter {
+  width: 170px;
+}
+.chip .acc {
+  margin-left: auto;
 }
 </style>

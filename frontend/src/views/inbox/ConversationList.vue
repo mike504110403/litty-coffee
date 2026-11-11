@@ -3,10 +3,16 @@ import { computed, ref, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { contactLabel, type Conversation } from '@/api/inbox'
 import ContactAvatar from '@/components/ContactAvatar.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import AccountTag from '@/components/AccountTag.vue'
+import { useAccountsStore } from '@/stores/accounts'
 import { shortTime } from '@/utils/time'
 
 const props = defineProps<{ conversations: Conversation[]; activeId: number | null; loading: boolean }>()
 const emit = defineEmits<{ select: [id: number]; search: [q: string] }>()
+// 帳號篩選（null＝全部帳號）；多個帳號時才顯示
+const account = defineModel<number | null>('account', { default: null })
+const accounts = useAccountsStore()
 
 type Tab = 'all' | 'unread' | 'human' | 'closed'
 const tab = ref<Tab>('all')
@@ -26,6 +32,7 @@ watch(q, (v) => {
 
 const filtered = computed(() =>
   props.conversations.filter((c) => {
+    if (account.value != null && c.igAccountId !== account.value) return false
     switch (tab.value) {
       case 'unread':
         return c.unreadCount > 0
@@ -40,13 +47,19 @@ const filtered = computed(() =>
 )
 
 const count = (k: Tab) =>
-  k === 'unread' ? props.conversations.filter((c) => c.unreadCount > 0).length : 0
+  k === 'unread'
+    ? props.conversations.filter((c) => c.unreadCount > 0 && (account.value == null || c.igAccountId === account.value))
+        .length
+    : 0
 </script>
 
 <template>
   <div class="list">
     <div class="head">
-      <el-input v-model="q" placeholder="搜尋顧客或訊息" :prefix-icon="Search" clearable />
+      <div class="search-row">
+        <el-input v-model="q" placeholder="搜尋顧客或訊息" :prefix-icon="Search" clearable />
+        <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
+      </div>
       <div class="tabs">
         <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: tab === t.key }" @click="tab = t.key">
           {{ t.label }}
@@ -76,6 +89,7 @@ const count = (k: Tab) =>
           <div class="row3">
             <span class="chip" :class="c.handler">{{ c.handler === 'human' ? '真人處理' : 'AI 接待' }}</span>
             <span v-if="c.contact.username && c.contact.name" class="handle">@{{ c.contact.username }}</span>
+            <AccountTag v-if="accounts.multi" :id="c.igAccountId" class="acc" />
           </div>
         </div>
       </button>
@@ -95,6 +109,18 @@ const count = (k: Tab) =>
 .head {
   padding: 14px 14px 8px;
   border-bottom: 1px solid var(--lc-border);
+}
+.search-row {
+  display: flex;
+  gap: 8px;
+}
+.acc-filter {
+  flex-shrink: 0;
+  width: 150px;
+}
+.row3 .acc {
+  margin-left: auto;
+  min-width: 0;
 }
 .tabs {
   display: flex;

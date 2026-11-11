@@ -27,7 +27,7 @@ func setup(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	if _, err := pool.Exec(context.Background(),
-		`TRUNCATE webhook_events, messages, conversations, contacts, ig_accounts, auto_rules, tags RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE webhook_events, messages, conversations, contacts, ig_accounts, ig_connections, auto_rules, tags RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	return pool
@@ -39,12 +39,23 @@ type msg struct {
 }
 
 func seedConv(t *testing.T, pool *pgxpool.Pool, igsid string, firstSeen time.Time, msgs []msg) (contactID, convID int64) {
-	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acct') ON CONFLICT DO NOTHING`); err != nil {
+	return seedConvFor(t, pool, "acct", igsid, firstSeen, msgs)
+}
+
+func accountID(t *testing.T, pool *pgxpool.Pool, igUserID string) int64 {
+	var id int64
+	if err := pool.QueryRow(context.Background(), `INSERT INTO ig_accounts (ig_user_id) VALUES ($1)
+ON CONFLICT (ig_user_id) DO UPDATE SET ig_user_id = EXCLUDED.ig_user_id RETURNING id`, igUserID).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
+	return id
+}
+
+func seedConvFor(t *testing.T, pool *pgxpool.Pool, accountIGID, igsid string, firstSeen time.Time, msgs []msg) (contactID, convID int64) {
+	ctx := context.Background()
+	acc := accountID(t, pool, accountIGID)
 	if err := pool.QueryRow(ctx, `INSERT INTO contacts (ig_account_id, igsid, username, first_seen_at, last_seen_at)
-VALUES ((SELECT id FROM ig_accounts WHERE ig_user_id='acct'), $1, $1, $2, $2) RETURNING id`, igsid, firstSeen).Scan(&contactID); err != nil {
+VALUES ($3, $1, $1, $2, $2) RETURNING id`, igsid, firstSeen, acc).Scan(&contactID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO conversations (contact_id) VALUES ($1) RETURNING id`, contactID).Scan(&convID); err != nil {
@@ -91,7 +102,37 @@ func TestSummary(t *testing.T) {
 	})
 
 	svc := &Service{DB: pool, Loc: loc}
-	sum, err := svc.Summary(context.Background(), 7, now)
+	// 第二個帳號的資料：只出現在「全部」與該帳號的統計
+	seedConvFor(t, pool, "acct-2", "z1", now.Add(-time.Hour), []msg{
+		{"in", "contact", "menu", now.Add(-time.Hour)}, {"out", "bot", "", now.Add(-time.Hour + time.Second)}})
+	acc1, acc2 := accountID(t, pool, "acct"), accountID(t, pool, "acct-2")
+	if _, err := pool.Exec(context.Background(), `INSERT INTO auto_rules (name, hit_count, ig_account_id) VALUES
+('菜單', 3, $1), ('菜單', 2, $2), ('訂位', 1, $2), ('範本規則', 99, NULL)`, acc1, acc2); err != nil {
+		t.Fatal(err)
+	}
+	all, err := svc.Summary(context.Background(), 7, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Current.Totals.Inbound != 6 || all.Current.Totals.NewContacts != 3 || all.Current.Totals.OutboundAuto != 3 {
+		t.Fatalf("all accounts totals: %+v", all.Current.Totals)
+	}
+	if len(all.TopRules) != 2 || all.TopRules[0].Name != "菜單" || all.TopRules[0].HitCount != 5 {
+		t.Fatalf("all top rules (同名合併、不含範本): %+v", all.TopRules)
+	}
+	only2, err := svc.Summary(context.Background(), 7, now, []int64{acc2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if t2 := only2.Current.Totals; t2.Inbound != 1 || t2.NewContacts != 1 || t2.OutboundAuto != 1 || t2.OutboundHuman != 0 ||
+		only2.Current.Response.Turns != 1 || only2.Daily[6].Inbound != 1 || only2.Hours[9] != 1 || len(only2.Intents) != 1 {
+		t.Fatalf("account 2 only: %+v %+v", t2, only2.Current.Response)
+	}
+	if len(only2.TopRules) != 2 || only2.TopRules[0].HitCount != 2 {
+		t.Fatalf("account 2 top rules: %+v", only2.TopRules)
+	}
+
+	sum, err := svc.Summary(context.Background(), 7, now, []int64{acc1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +183,7 @@ func TestSummary(t *testing.T) {
 func TestEmptySummary(t *testing.T) {
 	pool := setup(t)
 	loc, _ := time.LoadLocation("Asia/Taipei")
-	sum, err := (&Service{DB: pool, Loc: loc}).Summary(context.Background(), 30, time.Now())
+	sum, err := (&Service{DB: pool, Loc: loc}).Summary(context.Background(), 30, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,8 +245,33 @@ func TestContactsAndTags(t *testing.T) {
 	if err := svc.Update(ctx, 9999, &note, nil); err != crm.ErrNotFound {
 		t.Fatalf("missing contact: %v", err)
 	}
-	tags, _ := svc.Tags(ctx)
+	tags, _ := svc.Tags(ctx, nil)
 	if len(tags) != 2 {
 		t.Fatalf("tags: %+v", tags)
+	}
+
+	// 依帳號：另一個帳號的顧客不出現；標籤數只算該帳號的顧客
+	cid2, _ := seedConvFor(t, pool, "acct-2", "mocha", now, []msg{{"in", "contact", "", now}})
+	if err := svc.Update(ctx, cid2, nil, []int64{dog.ID}); err != nil {
+		t.Fatal(err)
+	}
+	acc1, acc2 := accountID(t, pool, "acct"), accountID(t, pool, "acct-2")
+	if list, _ := svc.List(ctx, crm.ListFilter{Accounts: []int64{acc2}}); len(list) != 1 || list[0].ID != cid2 || list[0].IGAccountID != acc2 {
+		t.Fatalf("contacts of account 2: %+v", list)
+	}
+	if list, _ := svc.List(ctx, crm.ListFilter{}); len(list) != 2 {
+		t.Fatalf("all contacts: %d", len(list))
+	}
+	count := func(accs []int64) int {
+		tags, _ := svc.Tags(ctx, accs)
+		for _, tg := range tags {
+			if tg.ID == dog.ID {
+				return tg.Count
+			}
+		}
+		return -1
+	}
+	if count(nil) != 2 || count([]int64{acc1}) != 1 || count([]int64{acc2}) != 1 {
+		t.Fatalf("tag counts all=%d a1=%d a2=%d", count(nil), count([]int64{acc1}), count([]int64{acc2}))
 	}
 }

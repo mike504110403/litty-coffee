@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ChatDotRound, MagicStick, Timer, Calendar } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
 import { postsApi } from '@/api/posts'
 import { formatCount, formatDuration, formatPercent } from '@/utils/format'
+import AccountSelect from '@/components/AccountSelect.vue'
+import { useAccountsStore } from '@/stores/accounts'
 
 const auth = useAuthStore()
 
@@ -20,12 +22,21 @@ const upcoming = ref<number | null>(null)
 // 各區塊依權限顯示；沒權限的 API 不打（後端會 403）
 const canAnalytics = computed(() => auth.can('analytics'))
 const canSchedule = computed(() => auth.can('schedule'))
-onMounted(async () => {
+// 帳號篩選（null＝全部帳號）
+const accounts = useAccountsStore()
+const account = ref<number | null>(null)
+async function load() {
+  const acc = account.value ?? undefined
   ;[today.value, upcoming.value] = await Promise.all([
-    canAnalytics.value ? crmApi.summary(1) : null,
-    canSchedule.value ? postsApi.upcomingCount() : null,
+    canAnalytics.value ? crmApi.summary(1, acc) : null,
+    canSchedule.value ? postsApi.upcomingCount(acc) : null,
   ])
+}
+onMounted(() => {
+  void accounts.ensure()
+  void load()
 })
+watch(account, load)
 
 const stats = computed(() => {
   const c = today.value?.current
@@ -42,7 +53,7 @@ const stats = computed(() => {
 // 只列出這位管理員有權限做的設定步驟
 const steps = computed(() =>
   [
-    { perm: 'ig_accounts', title: '連結 IG 商家帳號', desc: '在「設定」授權 Instagram，開始接收私訊' },
+    { perm: 'ig_accounts', title: '連結 IG 專業帳號', desc: '在「設定」用 Facebook 登入授權，可一次連多個帳號' },
     { perm: 'automation', title: '建立店家知識庫', desc: '菜單、營業時間、地址，讓 AI 回答更準' },
     { perm: 'automation', title: '設定關鍵字回覆', desc: '例如「菜單」「訂位」自動回應' },
   ].filter((st) => auth.can(st.perm as Parameters<typeof auth.can>[0])),
@@ -51,8 +62,13 @@ const steps = computed(() =>
 
 <template>
   <div>
-    <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
-    <p class="lc-page-sub">今天店裡的 IG 狀況一覽</p>
+    <div class="head">
+      <div>
+        <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
+        <p class="lc-page-sub">今天店裡的 IG 狀況一覽</p>
+      </div>
+      <AccountSelect v-if="accounts.multi && stats.length" v-model="account" allow-all class="acc-filter" />
+    </div>
 
     <div v-if="stats.length" class="stats">
       <div v-for="s in stats" :key="s.label" class="stat lc-card">
@@ -80,6 +96,16 @@ const steps = computed(() =>
 </template>
 
 <style scoped lang="scss">
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.acc-filter {
+  width: 170px;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

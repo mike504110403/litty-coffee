@@ -5,6 +5,9 @@ import { crmApi, type CrmContact, type Tag } from '@/api/crm'
 import { intentLabels } from '@/api/automation'
 import ContactAvatar from '@/components/ContactAvatar.vue'
 import ContactDrawer from '@/components/ContactDrawer.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import AccountTag from '@/components/AccountTag.vue'
+import { useAccountsStore } from '@/stores/accounts'
 import { shortTime } from '@/utils/time'
 
 const contacts = ref<CrmContact[]>([])
@@ -14,13 +17,22 @@ const q = ref('')
 const tag = ref<number | null>(null)
 const sort = ref<'recent' | 'active' | 'new'>('recent')
 const selected = ref<number | null>(null)
+// 帳號篩選（null＝全部帳號）；標籤數也只算該帳號的顧客
+const accounts = useAccountsStore()
+const account = ref<number | null>(null)
+onMounted(() => void accounts.ensure())
 
 async function load() {
   loading.value = true
   try {
     const [list, t] = await Promise.all([
-      crmApi.contacts({ q: q.value.trim() || undefined, tag: tag.value ?? undefined, sort: sort.value }),
-      crmApi.tags(),
+      crmApi.contacts({
+        q: q.value.trim() || undefined,
+        tag: tag.value ?? undefined,
+        sort: sort.value,
+        account: account.value ?? undefined,
+      }),
+      crmApi.tags(account.value ?? undefined),
     ])
     contacts.value = list
     tags.value = t
@@ -29,7 +41,7 @@ async function load() {
   }
 }
 onMounted(load)
-watch([tag, sort], load)
+watch([tag, sort, account], load)
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(q, () => {
   clearTimeout(timer)
@@ -39,7 +51,7 @@ watch(q, () => {
 function onUpdated(c: CrmContact) {
   const i = contacts.value.findIndex((x) => x.id === c.id)
   if (i >= 0) contacts.value[i] = { ...contacts.value[i], ...c }
-  void crmApi.tags().then((t) => (tags.value = t))
+  void crmApi.tags(account.value ?? undefined).then((t) => (tags.value = t))
 }
 </script>
 
@@ -59,6 +71,7 @@ function onUpdated(c: CrmContact) {
         <el-option label="訊息最多" value="active" />
         <el-option label="最新加入" value="new" />
       </el-select>
+      <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
     </div>
     <div v-if="tags.length" class="tag-filter">
       <button class="chip" :class="{ on: tag == null }" @click="tag = null">全部</button>
@@ -90,6 +103,7 @@ function onUpdated(c: CrmContact) {
         <div class="meta">
           <span class="when">{{ shortTime(c.lastSeenAt) }}</span>
           <span class="count">{{ c.inboundCount }} 則<template v-if="c.lastIntent"> · {{ intentLabels[c.lastIntent] ?? c.lastIntent }}</template></span>
+          <AccountTag v-if="accounts.multi" :id="c.igAccountId" />
         </div>
       </button>
       <el-empty v-if="!loading && !contacts.length" :image-size="90" description="沒有符合的顧客" />
@@ -102,6 +116,7 @@ function onUpdated(c: CrmContact) {
 <style scoped lang="scss">
 .filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 10px;
   .search {
@@ -112,6 +127,10 @@ function onUpdated(c: CrmContact) {
   }
   .sort {
     width: 124px;
+    flex-shrink: 0;
+  }
+  .acc-filter {
+    width: 160px;
     flex-shrink: 0;
   }
 }

@@ -26,9 +26,40 @@ func (s *Server) inboxRoutes(r chi.Router) {
 	r.Get("/conversations/{id}/messages", s.listMessages)
 	r.Post("/conversations/{id}/messages", s.sendMessage)
 	r.Get("/inbox/stream", s.inboxStream)
-	r.Get("/inbox/media/{name}", func(w http.ResponseWriter, r *http.Request) {
-		s.Inbox.MediaHandler(w, r, chi.URLParam(r, "name"))
-	})
+	r.Get("/inbox/media/{name}", s.inboxMedia)
+}
+
+// inboxMedia 只給看得到該對話帳號的人；範圍外與不存在一樣回 404。
+func (s *Server) inboxMedia(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	acc, err := s.Inbox.MediaAccount(r.Context(), name)
+	if errors.Is(err, inbox.ErrNotFound) || (err == nil && !canSee(r, acc)) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.inboxErr(w, err)
+		return
+	}
+	s.Inbox.MediaHandler(w, r, name)
+}
+
+// scopedConv 解析 {id} 並確認對話在登入者的可見範圍內（範圍外回 404）。
+func (s *Server) scopedConv(w http.ResponseWriter, r *http.Request) (inbox.Conversation, bool) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return inbox.Conversation{}, false
+	}
+	c, err := s.Inbox.GetConversation(r.Context(), id)
+	if err == nil && !canSee(r, c.IGAccountID) {
+		err = inbox.ErrNotFound
+	}
+	if err != nil {
+		s.inboxErr(w, err)
+		return c, false
+	}
+	return c, true
 }
 
 func idParam(r *http.Request) (int64, error) {
@@ -41,6 +72,8 @@ func (s *Server) inboxErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "找不到對話")
 	case errors.Is(err, inbox.ErrWindowClosed), errors.Is(err, inbox.ErrEmptyText):
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, inbox.ErrCannotSend):
+		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		log.Printf("inbox: %v", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -48,9 +81,13 @@ func (s *Server) inboxErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	list, err := s.Inbox.ListConversations(r.Context(), inbox.ListFilter{Status: q.Get("status"), Q: q.Get("q"), Limit: limit})
+	list, err := s.Inbox.ListConversations(r.Context(), inbox.ListFilter{Status: q.Get("status"), Q: q.Get("q"), Limit: limit, Accounts: accounts})
 	if err != nil {
 		s.inboxErr(w, err)
 		return
@@ -59,25 +96,19 @@ func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getConversation(w http.ResponseWriter, r *http.Request) {
-	id, err := idParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	c, err := s.Inbox.GetConversation(r.Context(), id)
-	if err != nil {
-		s.inboxErr(w, err)
+	c, ok := s.scopedConv(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
 }
 
 func (s *Server) patchConversation(w http.ResponseWriter, r *http.Request) {
-	id, err := idParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad id")
+	c, ok := s.scopedConv(w, r)
+	if !ok {
 		return
 	}
+	id := c.ID
 	var in struct {
 		Handler *string `json:"handler"`
 		Status  *string `json:"status"`
@@ -110,12 +141,11 @@ func (s *Server) patchErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) readConversation(w http.ResponseWriter, r *http.Request) {
-	id, err := idParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad id")
+	c, ok := s.scopedConv(w, r)
+	if !ok {
 		return
 	}
-	if err := s.Inbox.MarkRead(r.Context(), id); err != nil {
+	if err := s.Inbox.MarkRead(r.Context(), c.ID); err != nil {
 		s.inboxErr(w, err)
 		return
 	}
@@ -123,14 +153,13 @@ func (s *Server) readConversation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
-	id, err := idParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad id")
+	c, ok := s.scopedConv(w, r)
+	if !ok {
 		return
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	msgs, err := s.Inbox.ListMessages(r.Context(), id, before, limit)
+	msgs, err := s.Inbox.ListMessages(r.Context(), c.ID, before, limit)
 	if err != nil {
 		s.inboxErr(w, err)
 		return
@@ -139,11 +168,11 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
-	id, err := idParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad id")
+	c, ok := s.scopedConv(w, r)
+	if !ok {
 		return
 	}
+	id := c.ID
 	var in struct {
 		Text string `json:"text"`
 	}
@@ -159,7 +188,10 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, m)
 }
 
-// inboxStream 用 SSE 推送新訊息與對話更新。
+// streamPing 是 SSE 心跳間隔；每次心跳重讀登入者，停用、失去收件匣權限或可見帳號變更立即生效。
+var streamPing = 25 * time.Second
+
+// inboxStream 用 SSE 推送新訊息與對話更新；只推登入者看得到的帳號的事件。
 func (s *Server) inboxStream(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
@@ -174,16 +206,25 @@ func (s *Server) inboxStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, ": connected\n\n")
 	fl.Flush()
 
-	ping := time.NewTicker(25 * time.Second)
+	user := currentUser(r)
+	ping := time.NewTicker(streamPing)
 	defer ping.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ping.C:
+			u, err := s.Auth.Me(r.Context(), user.ID)
+			if err != nil || u.Disabled || !u.Can(auth.PermInbox) {
+				return
+			}
+			user = u
 			_, _ = io.WriteString(w, ": ping\n\n")
 			fl.Flush()
 		case e := <-ch:
+			if !user.CanSeeAccount(e.AccountID) {
+				continue
+			}
 			b, _ := json.Marshal(e.Data)
 			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, b)
 			fl.Flush()

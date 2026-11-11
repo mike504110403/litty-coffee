@@ -12,24 +12,35 @@ export const useInboxStore = defineStore('inbox', () => {
   const activeId = ref<number | null>(null)
   const loading = ref(false)
   const connected = ref(false)
+  const accountFilter = ref<number | null>(null) // null＝全部帳號
+  const query = ref('')
   let es: EventSource | null = null
 
   const totalUnread = computed(() => conversations.value.reduce((n, c) => n + c.unreadCount, 0))
   const active = computed(() => conversations.value.find((c) => c.id === activeId.value) ?? null)
 
-  async function fetchConversations(q = '') {
+  async function fetchConversations(q?: string) {
+    if (q !== undefined) query.value = q
     loading.value = true
     try {
-      conversations.value = (await inboxApi.list({ q })).sort(sortConvs)
+      conversations.value = (
+        await inboxApi.list({ q: query.value, account: accountFilter.value ?? undefined })
+      ).sort(sortConvs)
     } finally {
       loading.value = false
     }
   }
 
+  function setAccountFilter(id: number | null) {
+    accountFilter.value = id
+    void fetchConversations()
+  }
+
   function upsertConversation(c: Conversation) {
     const i = conversations.value.findIndex((x) => x.id === c.id)
     if (i >= 0) conversations.value[i] = c
-    else conversations.value.push(c)
+    else if (accountFilter.value == null || c.igAccountId === accountFilter.value || c.id === activeId.value)
+      conversations.value.push(c)
     conversations.value.sort(sortConvs)
   }
 
@@ -122,7 +133,7 @@ export const useInboxStore = defineStore('inbox', () => {
   }
 
   return {
-    conversations, messages, hasMore, activeId, active, loading, connected, totalUnread,
-    fetchConversations, open, loadOlder, markRead, send, patch, connect, disconnect,
+    conversations, messages, hasMore, activeId, active, loading, connected, totalUnread, accountFilter,
+    fetchConversations, setAccountFilter, open, loadOlder, markRead, send, patch, connect, disconnect,
   }
 })

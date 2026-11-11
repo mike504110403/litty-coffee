@@ -6,6 +6,8 @@ import "sync"
 type Event struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
+	// AccountID 是事件所屬的 IG 帳號（ig_accounts.id）；SSE 依登入者可見範圍過濾，0＝不屬於任何帳號
+	AccountID int64 `json:"-"`
 }
 
 // Hub 是行程內的簡易廣播；單機 MVP 足夠，多實例時換 PG LISTEN/NOTIFY。

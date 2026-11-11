@@ -6,6 +6,7 @@ export type SaveAction = 'draft' | 'schedule' | 'now'
 
 export interface MediaAsset {
   id: number
+  igAccountId: number // 上傳時選的帳號；只能用在該帳號的貼文
   filename: string
   originalName: string
   contentType: string
@@ -18,6 +19,7 @@ export interface MediaAsset {
 
 export interface Post {
   id: number
+  igAccountId: number // 發佈到哪個 IG 帳號
   kind: PostKind
   caption: string
   mediaIds: number[]
@@ -82,9 +84,10 @@ export const MAX_HASHTAGS = 30
 export const countHashtags = (s: string) => (s.match(/#[\p{L}\p{N}_]+/gu) ?? []).length
 
 export const postsApi = {
-  list: (params: { from?: string; to?: string; status?: string } = {}) =>
+  list: (params: { from?: string; to?: string; status?: string; account?: number } = {}) =>
     http.get<Post[]>('/posts', { params }).then((r) => r.data),
-  upcomingCount: () => http.get<{ count: number }>('/posts/upcoming-count').then((r) => r.data.count),
+  upcomingCount: (account?: number) =>
+    http.get<{ count: number }>('/posts/upcoming-count', { params: { account } }).then((r) => r.data.count),
   save: (post: Partial<Post> & { kind: PostKind }, action: SaveAction) =>
     (post.id ? http.put<Post>(`/posts/${post.id}`, { post, action }) : http.post<Post>('/posts', { post, action })).then(
       (r) => r.data,
@@ -92,9 +95,10 @@ export const postsApi = {
   refreshInsights: (id: number) =>
     http.post<Post>(`/posts/${id}/insights/refresh`, null, { timeout: 30000 }).then((r) => r.data),
   remove: (id: number) => http.delete(`/posts/${id}`),
-  upload: (file: File, onProgress?: (pct: number) => void) => {
+  upload: (account: number, file: File, onProgress?: (pct: number) => void) => {
     const fd = new FormData()
     fd.append('file', file)
+    fd.append('account', String(account))
     return http
       .post<MediaAsset>('/media', fd, {
         timeout: 300000,
@@ -102,8 +106,8 @@ export const postsApi = {
       })
       .then((r) => r.data)
   },
-  caption: (brief: string, kind: PostKind) =>
+  caption: (account: number, brief: string, kind: PostKind) =>
     http
-      .post<{ caption: string; hashtags: number }>('/posts/caption', { brief, kind }, { timeout: 90000 })
+      .post<{ caption: string; hashtags: number }>('/posts/caption', { brief, kind, account }, { timeout: 90000 })
       .then((r) => r.data),
 }

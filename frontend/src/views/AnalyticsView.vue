@@ -6,6 +6,8 @@ import { interactions, kindLabels, postsApi, type Post } from '@/api/posts'
 import { intentLabels } from '@/api/automation'
 import ColumnChart from '@/components/charts/ColumnChart.vue'
 import BarList from '@/components/charts/BarList.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import { useAccountsStore } from '@/stores/accounts'
 import { delta, formatCount, formatDuration, formatPercent } from '@/utils/format'
 
 // 已驗證的類別色（自動＝slot 1 藍、真人＝slot 2 橘）；單一系列數量圖用藍
@@ -20,6 +22,10 @@ const ranges = [
   { v: 30, label: '30 天' },
   { v: 90, label: '90 天' },
 ]
+// 帳號篩選（null＝全部帳號）；統計與貼文成效都跟著它
+const accounts = useAccountsStore()
+const account = ref<number | null>(null)
+onMounted(() => void accounts.ensure())
 const data = ref<Summary | null>(null)
 const loading = ref(false)
 const tableView = ref(false)
@@ -27,13 +33,13 @@ const tableView = ref(false)
 async function load() {
   loading.value = true
   try {
-    data.value = await crmApi.summary(days.value)
+    data.value = await crmApi.summary(days.value, account.value ?? undefined)
   } finally {
     loading.value = false
   }
 }
 onMounted(load)
-watch(days, load)
+watch([days, account], load)
 
 // ---- 貼文成效：區間內已發佈、且已取得數據的貼文，依互動數排序 ----
 const posts = ref<Post[]>([])
@@ -44,7 +50,7 @@ async function loadPosts() {
   postsLoading.value = true
   try {
     const from = new Date(Date.now() - days.value * 86400_000)
-    posts.value = await postsApi.list({ status: 'published', from: from.toISOString() })
+    posts.value = await postsApi.list({ status: 'published', from: from.toISOString(), account: account.value ?? undefined })
   } catch {
     posts.value = []
   } finally {
@@ -52,7 +58,7 @@ async function loadPosts() {
   }
 }
 onMounted(loadPosts)
-watch(days, loadPosts)
+watch([days, account], loadPosts)
 
 const num = (n: number | undefined) => (n == null ? '—' : formatCount(n))
 const shortDate = (iso: string | null) => {
@@ -146,6 +152,7 @@ const busiest = computed(() => {
         <p class="lc-page-sub">IG 私訊的量、自動化程度與回應速度</p>
       </div>
       <div class="controls">
+        <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
         <el-segmented v-model="days" :options="ranges.map((r) => ({ label: r.label, value: r.v }))" />
         <el-segmented
           v-model="tableView"
@@ -304,6 +311,9 @@ const busiest = computed(() => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+}
+.acc-filter {
+  width: 170px;
 }
 .controls {
   display: flex;

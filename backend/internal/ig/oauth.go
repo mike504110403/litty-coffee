@@ -12,165 +12,189 @@ import (
 	"time"
 )
 
-// Business Login for Instagram（Instagram API with Instagram Login）。
-// 流程：authorize → code 換短效 token → 換 60 天長效 token → 每次續期再 60 天（需 token 已滿 24 小時）。
+// Instagram API with Unified Login（Facebook 登入的「配置」流程，官方建議新整合採用的設定）。
+// 流程：facebook.com/dialog/oauth（帶 config_id，不帶 scope）→ code 換業務組合擁有的
+// system user access token（SUAT）→ /me 取 client_business_id → /me/assigned_instagram_accounts 列出
+// 這個 token 能用的 IG 專業帳號 → 逐一訂閱 webhook。
+//
+// SUAT 只能打 graph.facebook.com（graph.instagram.com 不行）。token 壽命在配置裡設定（預設永不過期）。
+// TODO：未實作 Token Management API（POST /{client_business_id}/system_user_access_tokens）；
+// 配置若設了到期日，到期前只能請店家重新連結。
 
-// Scopes 是後台需要的權限：基本資料、私訊、發文、成效數據。
-var Scopes = []string{
-	"instagram_business_basic",
-	"instagram_business_manage_messages",
-	"instagram_business_content_publish",
-	"instagram_business_manage_insights",
+// Permissions 是配置裡要勾的權限（Unified Login 不在授權網址帶 scope，這份只給設定頁／文件參考）。
+var Permissions = []string{
+	"instagram_basic",
+	"instagram_manage_messages",
+	"instagram_content_publish",
+	"instagram_manage_insights",
 }
 
-// AccountInfo 是 /me 回傳的商家帳號資料。UserID 是 webhook entry.id 用的那個 ID。
+// Token 是換到的存取權杖；ExpiresAt nil＝永不過期（或查不到）。
+type Token struct {
+	AccessToken string
+	ExpiresAt   *time.Time
+}
+
+// Business 是 token 所屬的業務組合與系統用戶。
+type Business struct {
+	ClientBusinessID string `json:"client_business_id"`
+	SystemUserID     string `json:"id"`
+}
+
+// AccountInfo 是 token 指派到的 IG 專業帳號。UserID 就是 webhook entry.id 用的那個 ID。
+// name／profile_picture_url 文件沒寫，有就用、沒有也不算錯。
+// TODO：Unified Login 沒有 account_type，無法擋個人帳號（個人帳號本來也指派不到業務組合）。
 type AccountInfo struct {
-	UserID      string `json:"user_id"`
-	Username    string `json:"username"`
-	Name        string `json:"name"`
-	ProfilePic  string `json:"profile_picture_url"`
-	AccountType string `json:"account_type"`
-}
-
-type LongToken struct {
-	Token     string
-	ExpiresIn time.Duration
+	UserID     string `json:"id"`
+	Username   string `json:"username"`
+	Name       string `json:"name"`
+	ProfilePic string `json:"profile_picture_url"`
 }
 
 type OAuth interface {
 	AuthorizeURL(state string) string
-	Exchange(ctx context.Context, code string) (shortToken string, err error)
-	LongLived(ctx context.Context, shortToken string) (LongToken, error)
-	Refresh(ctx context.Context, token string) (LongToken, error)
-	Me(ctx context.Context, token string) (AccountInfo, error)
-	Subscribe(ctx context.Context, token string) error // 讓本 app 收到該帳號的私訊、已讀、表情 webhook
+	Exchange(ctx context.Context, code string) (Token, error)
+	Business(ctx context.Context, token string) (Business, error)
+	Accounts(ctx context.Context, token string) ([]AccountInfo, error)
+	Subscribe(ctx context.Context, token, igUserID string) error // 讓本 app 收到該帳號的私訊、已讀、表情 webhook
+	ConfigID() string
 }
 
 type OAuthClient struct {
-	AppID, AppSecret, RedirectURI string
-	AuthBase                      string // https://www.instagram.com
-	TokenBase                     string // https://api.instagram.com
-	GraphBase                     string // https://graph.instagram.com（不帶版本，換長效／續期用）
-	APIBase                       string // https://graph.instagram.com/v23.0
-	HTTP                          *http.Client
+	AppID, AppSecret, ConfigurationID, RedirectURI string
+	DialogBase                                     string // https://www.facebook.com
+	APIBase                                        string // https://graph.facebook.com/v27.0
+	HTTP                                           *http.Client
 }
 
-func NewOAuthClient(appID, appSecret, redirectURI, apiBase string) *OAuthClient {
+func NewOAuthClient(appID, appSecret, configID, redirectURI, apiBase string) *OAuthClient {
 	return &OAuthClient{
-		AppID: appID, AppSecret: appSecret, RedirectURI: redirectURI,
-		AuthBase: "https://www.instagram.com", TokenBase: "https://api.instagram.com",
-		GraphBase: "https://graph.instagram.com", APIBase: apiBase,
+		AppID: appID, AppSecret: appSecret, ConfigurationID: configID, RedirectURI: redirectURI,
+		DialogBase: "https://www.facebook.com", APIBase: strings.TrimRight(apiBase, "/"),
 		HTTP: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
+func (c *OAuthClient) ConfigID() string { return c.ConfigurationID }
+
 func (c *OAuthClient) AuthorizeURL(state string) string {
 	q := url.Values{
 		"client_id":     {c.AppID},
+		"config_id":     {c.ConfigurationID},
 		"redirect_uri":  {c.RedirectURI},
 		"response_type": {"code"},
-		"scope":         {strings.Join(Scopes, ",")},
 		"state":         {state},
 	}
-	return c.AuthBase + "/oauth/authorize?" + q.Encode()
+	return c.DialogBase + "/dialog/oauth?" + q.Encode()
 }
 
-func (c *OAuthClient) Exchange(ctx context.Context, code string) (string, error) {
-	code = strings.TrimSuffix(code, "#_") // IG 會在 redirect 的 code 後面黏 #_
-	form := url.Values{
+// Exchange 用 code 換 token；回應沒有 expires_in 時再用 /debug_token 查到期日（查不到視為永不過期）。
+func (c *OAuthClient) Exchange(ctx context.Context, code string) (Token, error) {
+	q := url.Values{
 		"client_id":     {c.AppID},
 		"client_secret": {c.AppSecret},
-		"grant_type":    {"authorization_code"},
 		"redirect_uri":  {c.RedirectURI},
 		"code":          {code},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenBase+"/oauth/access_token", strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	body, err := c.send(req)
-	if err != nil {
-		return "", err
-	}
-	return parseShortToken(body)
-}
-
-// parseShortToken 同時接受 {"data":[{access_token}]} 與扁平 {access_token} 兩種回應形狀（官方文件兩種都出現過）。
-func parseShortToken(body []byte) (string, error) {
 	var out struct {
 		AccessToken string `json:"access_token"`
-		Data        []struct {
-			AccessToken string `json:"access_token"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", err
-	}
-	if out.AccessToken != "" {
-		return out.AccessToken, nil
-	}
-	if len(out.Data) > 0 && out.Data[0].AccessToken != "" {
-		return out.Data[0].AccessToken, nil
-	}
-	return "", errors.New("instagram oauth: 回應沒有 access_token")
-}
-
-func (c *OAuthClient) LongLived(ctx context.Context, short string) (LongToken, error) {
-	q := url.Values{"grant_type": {"ig_exchange_token"}, "client_secret": {c.AppSecret}, "access_token": {short}}
-	return c.longToken(ctx, c.GraphBase+"/access_token?"+q.Encode())
-}
-
-func (c *OAuthClient) Refresh(ctx context.Context, token string) (LongToken, error) {
-	q := url.Values{"grant_type": {"ig_refresh_token"}, "access_token": {token}}
-	return c.longToken(ctx, c.GraphBase+"/refresh_access_token?"+q.Encode())
-}
-
-func (c *OAuthClient) longToken(ctx context.Context, u string) (LongToken, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return LongToken{}, err
-	}
-	body, err := c.send(req)
-	if err != nil {
-		return LongToken{}, err
-	}
-	var out struct {
-		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
 		ExpiresIn   int64  `json:"expires_in"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return LongToken{}, err
+	if err := c.get(ctx, c.APIBase+"/oauth/access_token?"+q.Encode(), "", &out); err != nil {
+		return Token{}, err
 	}
 	if out.AccessToken == "" {
-		return LongToken{}, errors.New("instagram oauth: 回應沒有 access_token")
+		return Token{}, errors.New("meta oauth: 回應沒有 access_token")
 	}
-	return LongToken{Token: out.AccessToken, ExpiresIn: time.Duration(out.ExpiresIn) * time.Second}, nil
+	t := Token{AccessToken: out.AccessToken}
+	if out.ExpiresIn > 0 {
+		exp := time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
+		t.ExpiresAt = &exp
+		return t, nil
+	}
+	// 未驗證：SUAT 是否能用 debug_token 查到期日；失敗不影響連結
+	if exp, err := c.TokenExpiry(ctx, out.AccessToken); err == nil {
+		t.ExpiresAt = exp
+	}
+	return t, nil
 }
 
-func (c *OAuthClient) Me(ctx context.Context, token string) (AccountInfo, error) {
-	var a AccountInfo
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.APIBase+"/me?fields=user_id,username,name,profile_picture_url,account_type", nil)
-	if err != nil {
-		return a, err
+// TokenExpiry 用 /debug_token（app token＝AppID|AppSecret）查到期日；expires_at=0 表示永不過期，回 nil。
+func (c *OAuthClient) TokenExpiry(ctx context.Context, token string) (*time.Time, error) {
+	q := url.Values{"input_token": {token}, "access_token": {c.AppID + "|" + c.AppSecret}}
+	var out struct {
+		Data struct {
+			ExpiresAt int64 `json:"expires_at"`
+			IsValid   *bool `json:"is_valid"`
+		} `json:"data"`
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	body, err := c.send(req)
-	if err != nil {
-		return a, err
+	if err := c.get(ctx, c.APIBase+"/debug_token?"+q.Encode(), "", &out); err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(body, &a); err != nil {
-		return a, err
+	if out.Data.IsValid != nil && !*out.Data.IsValid {
+		return nil, errors.New("meta: token 已失效，請重新連結")
 	}
-	if a.UserID == "" {
-		return a, errors.New("instagram /me 沒有 user_id")
+	if out.Data.ExpiresAt <= 0 {
+		return nil, nil
 	}
-	return a, nil
+	t := time.Unix(out.Data.ExpiresAt, 0)
+	return &t, nil
 }
 
-func (c *OAuthClient) Subscribe(ctx context.Context, token string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+"/me/subscribed_apps?subscribed_fields=messages,messaging_seen,message_reactions", nil)
+func (c *OAuthClient) Business(ctx context.Context, token string) (Business, error) {
+	var b Business
+	if err := c.get(ctx, c.APIBase+"/me?fields=id,client_business_id", token, &b); err != nil {
+		return b, err
+	}
+	if b.SystemUserID == "" {
+		return b, errors.New("meta /me 沒有 id")
+	}
+	return b, nil
+}
+
+// maxAccountPages 防止分頁回應有誤時無限迴圈。
+const maxAccountPages = 50
+
+// Accounts 列出 token 指派到的全部 IG 帳號（跟著 paging.cursors.after 翻頁）。
+func (c *OAuthClient) Accounts(ctx context.Context, token string) ([]AccountInfo, error) {
+	out := []AccountInfo{}
+	after := ""
+	for page := 0; page < maxAccountPages; page++ {
+		q := url.Values{"fields": {"id,username,name,profile_picture_url"}}
+		if after != "" {
+			q.Set("after", after)
+		}
+		var res struct {
+			Data   []AccountInfo `json:"data"`
+			Paging struct {
+				Cursors struct {
+					After string `json:"after"`
+				} `json:"cursors"`
+				Next string `json:"next"`
+			} `json:"paging"`
+		}
+		if err := c.get(ctx, c.APIBase+"/me/assigned_instagram_accounts?"+q.Encode(), token, &res); err != nil {
+			return nil, err
+		}
+		for _, a := range res.Data {
+			if a.UserID != "" {
+				out = append(out, a)
+			}
+		}
+		next := res.Paging.Cursors.After
+		if len(res.Data) == 0 || next == "" || next == after || res.Paging.Next == "" {
+			return out, nil
+		}
+		after = next
+	}
+	return out, nil
+}
+
+func (c *OAuthClient) Subscribe(ctx context.Context, token, igUserID string) error {
+	u := fmt.Sprintf("%s/%s/subscribed_apps?subscribed_fields=messages,messaging_seen,message_reactions",
+		c.APIBase, url.PathEscape(igUserID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 	if err != nil {
 		return err
 	}
@@ -183,9 +207,24 @@ func (c *OAuthClient) Subscribe(ctx context.Context, token string) error {
 		Success bool `json:"success"`
 	}
 	if json.Unmarshal(body, &out) == nil && !out.Success {
-		return errors.New("instagram 訂閱 webhook 回傳 success=false")
+		return errors.New("meta 訂閱 webhook 回傳 success=false")
 	}
 	return nil
+}
+
+func (c *OAuthClient) get(ctx context.Context, u, token string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	body, err := c.send(req)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, out)
 }
 
 func (c *OAuthClient) send(req *http.Request) ([]byte, error) {
@@ -199,59 +238,64 @@ func (c *OAuthClient) send(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	if res.StatusCode >= 300 {
-		var e struct {
-			Error struct {
-				Message string `json:"message"`
-				Code    int    `json:"code"`
-			} `json:"error"`
-			ErrorMessage string `json:"error_message"` // api.instagram.com 的錯誤形狀
-		}
+		var e apiError
 		_ = json.Unmarshal(body, &e)
-		msg := e.Error.Message
-		if msg == "" {
-			msg = e.ErrorMessage
-		}
-		return nil, fmt.Errorf("instagram api %d: %s", res.StatusCode, msg)
+		return nil, &APIError{Status: res.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
 	}
 	return body, nil
 }
 
-// FakeOAuth 給開發模擬器用：授權頁直接導回 callback，連上的帳號就是模擬器的假商家帳號。
+// FakeOAuth 給開發模擬器用：授權頁直接導回 callback，連上兩個模擬商家帳號。
 type FakeOAuth struct {
-	RedirectURI string
-	Account     AccountInfo
-	FailRefresh bool
-	Refreshed   int
+	RedirectURI  string
+	Biz          Business
+	List         []AccountInfo
+	Token        Token
+	SubscribeErr map[string]error // 測試用：這些帳號訂閱失敗
+	Subscribed   []string
 }
 
-func NewFakeOAuth(redirectURI, accountID string) *FakeOAuth {
-	return &FakeOAuth{RedirectURI: redirectURI, Account: AccountInfo{
-		UserID: accountID, Username: "littycoffee", Name: "Litty Coffee（模擬）", AccountType: "BUSINESS",
-	}}
+// 模擬器的兩個假商家帳號（webhook entry.id）。
+const (
+	FakeAccountCoffee   = "dev-litty-coffee"
+	FakeAccountRoastery = "dev-litty-roastery"
+)
+
+func NewFakeOAuth(redirectURI string) *FakeOAuth {
+	return &FakeOAuth{
+		RedirectURI: redirectURI,
+		Biz:         Business{ClientBusinessID: "dev-business", SystemUserID: "dev-system-user"},
+		List: []AccountInfo{
+			{UserID: FakeAccountCoffee, Username: "littycoffee", Name: "Litty Coffee（模擬）"},
+			{UserID: FakeAccountRoastery, Username: "littyroastery", Name: "Litty Roastery（模擬）"},
+		},
+		Token: Token{AccessToken: "dev-suat"},
+	}
 }
+
+func (f *FakeOAuth) ConfigID() string { return "dev-config" }
 
 func (f *FakeOAuth) AuthorizeURL(state string) string {
-	return f.RedirectURI + "?" + url.Values{"code": {"dev-code#_"}, "state": {state}}.Encode()
+	return f.RedirectURI + "?" + url.Values{"code": {"dev-code"}, "state": {state}}.Encode()
 }
 
-func (f *FakeOAuth) Exchange(_ context.Context, code string) (string, error) {
-	if strings.TrimSuffix(code, "#_") != "dev-code" {
-		return "", errors.New("instagram api 400: invalid code")
+func (f *FakeOAuth) Exchange(_ context.Context, code string) (Token, error) {
+	if code != "dev-code" {
+		return Token{}, &APIError{Status: 400, Message: "invalid code"}
 	}
-	return "dev-short", nil
+	return f.Token, nil
 }
 
-func (f *FakeOAuth) LongLived(context.Context, string) (LongToken, error) {
-	return LongToken{Token: "dev-long", ExpiresIn: 60 * 24 * time.Hour}, nil
+func (f *FakeOAuth) Business(context.Context, string) (Business, error) { return f.Biz, nil }
+
+func (f *FakeOAuth) Accounts(context.Context, string) ([]AccountInfo, error) {
+	return append([]AccountInfo(nil), f.List...), nil
 }
 
-func (f *FakeOAuth) Refresh(context.Context, string) (LongToken, error) {
-	if f.FailRefresh {
-		return LongToken{}, errors.New("instagram api 400: token expired")
+func (f *FakeOAuth) Subscribe(_ context.Context, _, igUserID string) error {
+	if err := f.SubscribeErr[igUserID]; err != nil {
+		return err
 	}
-	f.Refreshed++
-	return LongToken{Token: fmt.Sprintf("dev-long-r%d", f.Refreshed), ExpiresIn: 60 * 24 * time.Hour}, nil
+	f.Subscribed = append(f.Subscribed, igUserID)
+	return nil
 }
-
-func (f *FakeOAuth) Me(context.Context, string) (AccountInfo, error) { return f.Account, nil }
-func (f *FakeOAuth) Subscribe(context.Context, string) error         { return nil }

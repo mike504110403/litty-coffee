@@ -24,6 +24,7 @@ import (
 var credentialNames = map[string]string{
 	"igAppId":         appsettings.KeyIGAppID,
 	"igAppSecret":     appsettings.KeyIGAppSecret,
+	"igConfigId":      appsettings.KeyIGConfigID,
 	"igVerifyToken":   appsettings.KeyIGVerifyToken,
 	"anthropicApiKey": appsettings.KeyAnthropicKey,
 	"aiModel":         appsettings.KeyAIModel,

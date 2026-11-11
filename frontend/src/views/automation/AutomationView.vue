@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { automationApi } from '@/api/automation'
 import RulesPanel from './RulesPanel.vue'
 import KnowledgePanel from './KnowledgePanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SandboxPanel from './SandboxPanel.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import { useAccountsStore } from '@/stores/accounts'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,7 +26,15 @@ const tab = computed<TabKey>({
 })
 
 const status = ref<{ aiConfigured: boolean; model: string } | null>(null)
+
+// 每個 IG 帳號有自己的規則、知識庫、AI 設定；沙盒也用選的帳號
+const accounts = useAccountsStore()
+const accountId = ref<number | null>(null)
+watch(accountId, (id) => accounts.remember(id))
+
 onMounted(async () => {
+  await accounts.ensure()
+  accountId.value = accounts.lastUsed()
   status.value = await automationApi.status()
 })
 </script>
@@ -42,16 +52,27 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="tabs">
-      <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: tab === t.key }" @click="tab = t.key">
-        {{ t.label }}
-      </button>
+    <div class="toolbar">
+      <div class="tabs">
+        <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: tab === t.key }" @click="tab = t.key">
+          {{ t.label }}
+        </button>
+      </div>
+      <AccountSelect v-if="accounts.list.length" v-model="accountId" class="acc" />
     </div>
 
-    <RulesPanel v-if="tab === 'rules'" />
-    <KnowledgePanel v-else-if="tab === 'knowledge'" />
-    <SettingsPanel v-else-if="tab === 'ai'" :ai-configured="!!status?.aiConfigured" />
-    <SandboxPanel v-else :ai-configured="!!status?.aiConfigured" />
+    <el-empty v-if="accounts.loaded && !accounts.list.length" description="還沒有 IG 帳號：請先到「設定」連結" />
+    <template v-else-if="accountId != null">
+      <RulesPanel v-if="tab === 'rules'" :key="`r${accountId}`" :account-id="accountId" />
+      <KnowledgePanel v-else-if="tab === 'knowledge'" :key="`k${accountId}`" :account-id="accountId" />
+      <SettingsPanel
+        v-else-if="tab === 'ai'"
+        :key="`s${accountId}`"
+        :account-id="accountId"
+        :ai-configured="!!status?.aiConfigured"
+      />
+      <SandboxPanel v-else :key="`t${accountId}`" :account-id="accountId" :ai-configured="!!status?.aiConfigured" />
+    </template>
   </div>
 </template>
 
@@ -83,11 +104,18 @@ onMounted(async () => {
     color: var(--lc-tone-sage-fg);
   }
 }
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
 .tabs {
   display: flex;
   gap: 4px;
   padding: 4px;
-  margin-bottom: 18px;
   border-radius: 14px;
   background: var(--lc-bg-track);
   width: fit-content;
@@ -124,6 +152,9 @@ onMounted(async () => {
     margin-bottom: 12px;
   }
   .tabs {
+    width: 100%;
+  }
+  .acc {
     width: 100%;
   }
   .tab {

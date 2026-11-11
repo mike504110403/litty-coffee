@@ -28,11 +28,22 @@ const emit = defineEmits<{ saved: [] }>()
 const groups: GroupDef[] = [
   {
     id: 'meta',
-    title: 'Meta App（Instagram 登入）',
-    desc: '連結 IG 帳號、接收私訊 webhook 用。這些值來自 Meta 開發者後台的 Instagram 產品設定。',
+    title: 'Meta App（Instagram API with Unified Login）',
+    desc: '連結 IG 帳號、接收私訊 webhook 用。填 Meta App ID／App Secret（應用程式設定 → 基本資料），以及 Facebook 登入「配置」的配置 ID。',
     fields: [
-      { key: 'igAppId', label: 'Instagram App ID', placeholder: '純數字', help: '設定頁「連結 IG 帳號」的 OAuth 用' },
-      { key: 'igAppSecret', label: 'Instagram App Secret', secret: true, help: '換 token 與驗證 webhook 簽章用' },
+      {
+        key: 'igAppId',
+        label: 'Meta App ID',
+        placeholder: '純數字',
+        help: '應用程式設定 → 基本資料；設定頁「連結 IG 帳號」的 Facebook 登入授權用',
+      },
+      {
+        key: 'igAppSecret',
+        label: 'Meta App Secret',
+        secret: true,
+        help: '應用程式設定 → 基本資料；換 token 與驗證 webhook 簽章用',
+      },
+      { key: 'igConfigId', label: '配置 ID', placeholder: '純數字', help: 'Facebook 登入 → 配置（勾好 IG 權限的那一個）的 ID' },
       { key: 'igVerifyToken', label: 'Webhook 驗證 Token', secret: true, help: '要和 Meta 後台 webhook 欄位填的「驗證權杖」一致' },
     ],
   },
@@ -53,6 +64,7 @@ const loading = ref(true)
 const draft = reactive<Record<CredentialKey, string>>({
   igAppId: '',
   igAppSecret: '',
+  igConfigId: '',
   igVerifyToken: '',
   anthropicApiKey: '',
   aiModel: '',

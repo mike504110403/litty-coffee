@@ -22,6 +22,7 @@ type Tag struct {
 
 type Contact struct {
 	ID             int64     `json:"id"`
+	IGAccountID    int64     `json:"igAccountId"` // 傳訊給哪個我方 IG 帳號
 	IGSID          string    `json:"igsid"`
 	Username       string    `json:"username"`
 	Name           string    `json:"name"`
@@ -52,7 +53,7 @@ type Service struct{ DB *pgxpool.Pool }
 
 // 以 tag 聚合成 JSON，避免 N+1
 const contactSelect = `
-SELECT ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url, ct.note, ct.first_seen_at, ct.last_seen_at,
+SELECT ct.id, ct.ig_account_id, ct.igsid, ct.username, ct.name, ct.avatar_url, ct.note, ct.first_seen_at, ct.last_seen_at,
        cv.id, COALESCE(cv.handler, ''),
        (SELECT count(*) FROM messages m WHERE m.conversation_id = cv.id AND m.direction = 'in'),
        COALESCE((SELECT m.meta->>'intent' FROM messages m
@@ -64,7 +65,7 @@ FROM contacts ct LEFT JOIN conversations cv ON cv.contact_id = ct.id`
 
 func scanContact(row pgx.Row) (Contact, error) {
 	var c Contact
-	err := row.Scan(&c.ID, &c.IGSID, &c.Username, &c.Name, &c.AvatarURL, &c.Note, &c.FirstSeenAt, &c.LastSeenAt,
+	err := row.Scan(&c.ID, &c.IGAccountID, &c.IGSID, &c.Username, &c.Name, &c.AvatarURL, &c.Note, &c.FirstSeenAt, &c.LastSeenAt,
 		&c.ConversationID, &c.Handler, &c.InboundCount, &c.LastIntent, &c.Tags)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
@@ -73,9 +74,10 @@ func scanContact(row pgx.Row) (Contact, error) {
 }
 
 type ListFilter struct {
-	Q     string
-	TagID int64
-	Sort  string // recent | active | new
+	Q        string
+	TagID    int64
+	Sort     string  // recent | active | new
+	Accounts []int64 // 只列這些 IG 帳號的顧客；nil＝全部
 }
 
 func (s *Service) List(ctx context.Context, f ListFilter) ([]Contact, error) {
@@ -84,12 +86,13 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Contact, error) {
 	case "new":
 		order = "ct.first_seen_at DESC"
 	case "active":
-		order = "11 DESC, ct.last_seen_at DESC" // inbound count
+		order = "12 DESC, ct.last_seen_at DESC" // inbound count
 	}
 	rows, err := s.DB.Query(ctx, contactSelect+`
 WHERE ($1 = '' OR ct.username ILIKE '%' || $1 || '%' OR ct.name ILIKE '%' || $1 || '%' OR ct.note ILIKE '%' || $1 || '%')
   AND ($2 = 0 OR EXISTS (SELECT 1 FROM contact_tags x WHERE x.contact_id = ct.id AND x.tag_id = $2))
-ORDER BY `+order+` LIMIT 500`, f.Q, f.TagID)
+  AND ($3::bigint[] IS NULL OR ct.ig_account_id = ANY($3))
+ORDER BY `+order+` LIMIT 500`, f.Q, f.TagID, f.Accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +174,13 @@ ON CONFLICT DO NOTHING`, id, tagIDs); err != nil {
 
 var palette = []string{"#8b5e3c", "#c8915a", "#a2504a", "#5f7f5a", "#6b6fa8", "#b07a9b", "#3f7f86", "#b7791f"}
 
-func (s *Service) Tags(ctx context.Context) ([]Tag, error) {
+// Tags 回全部標籤（標籤本身全店共用）；Count 只算 accounts 內的顧客（nil＝全部帳號）。
+func (s *Service) Tags(ctx context.Context, accounts []int64) ([]Tag, error) {
 	rows, err := s.DB.Query(ctx, `
-SELECT t.id, t.name, t.color, count(x.contact_id) FROM tags t LEFT JOIN contact_tags x ON x.tag_id = t.id
-GROUP BY t.id ORDER BY t.name`)
+SELECT t.id, t.name, t.color,
+       count(x.contact_id) FILTER (WHERE $1::bigint[] IS NULL OR ct.ig_account_id = ANY($1))
+FROM tags t LEFT JOIN contact_tags x ON x.tag_id = t.id LEFT JOIN contacts ct ON ct.id = x.contact_id
+GROUP BY t.id ORDER BY t.name`, accounts)
 	if err != nil {
 		return nil, err
 	}

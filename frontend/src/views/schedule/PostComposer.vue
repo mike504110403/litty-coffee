@@ -15,17 +15,22 @@ import {
   type SaveAction,
 } from '@/api/posts'
 import IgPreview from '@/components/IgPreview.vue'
+import AccountSelect from '@/components/AccountSelect.vue'
+import { useAccountsStore } from '@/stores/accounts'
 import PostInsights from './PostInsights.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
-const props = defineProps<{ post: Post | null; defaultDate: Date | null; bestHours: number[] }>()
+// defaultAccount：新貼文預設的帳號（例如行事曆正篩選某帳號）；沒給就用上次用的
+const props = defineProps<{ post: Post | null; defaultDate: Date | null; bestHours: number[]; defaultAccount?: number | null }>()
 const visible = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ saved: []; insightsUpdated: [post: Post] }>()
 
 const isMobile = useIsMobile()
 
+const accounts = useAccountsStore()
 const form = reactive({
   id: 0,
+  account: null as number | null,
   kind: 'image' as PostKind,
   caption: '',
   media: [] as MediaAsset[],
@@ -38,6 +43,7 @@ watch(visible, (v) => {
   if (!v) return
   const p = props.post
   form.id = p?.id ?? 0
+  form.account = p?.igAccountId ?? props.defaultAccount ?? accounts.lastUsed()
   form.kind = p?.kind ?? 'image'
   form.caption = p?.caption ?? ''
   form.media = [...(p?.media ?? [])]
@@ -45,6 +51,19 @@ watch(visible, (v) => {
   mobileTab.value = 'edit'
   aiBrief.value = ''
 })
+
+// ---- 帳號 ----
+const account = computed(() => (form.account == null ? undefined : accounts.byId.get(form.account)))
+// 媒體只能用在上傳時選的帳號：換帳號時清掉別的帳號的媒體
+watch(
+  () => form.account,
+  (id) => {
+    if (id == null) return
+    const before = form.media.length
+    form.media = form.media.filter((m) => m.igAccountId === id)
+    if (form.media.length < before) ElMessage.info('已移除屬於其他帳號的媒體，請重新上傳')
+  },
+)
 
 // ---- 媒體 ----
 const accept = computed(() =>
@@ -57,13 +76,19 @@ const fileInput = ref<HTMLInputElement>()
 async function onFiles(e: Event) {
   const files = Array.from((e.target as HTMLInputElement).files ?? [])
   ;(e.target as HTMLInputElement).value = ''
+  const acc = form.account
+  if (acc == null) {
+    ElMessage.warning('請先選擇要發佈的 IG 帳號')
+    return
+  }''
   const room = maxMedia.value - form.media.length
   if (files.length > room) ElMessage.warning(`${kindLabels[form.kind]}最多 ${maxMedia.value} 個，多的已略過`)
   for (const f of files.slice(0, Math.max(0, room))) {
     const item = reactive({ name: f.name, pct: 0 })
     uploading.value.push(item)
     try {
-      const a = await postsApi.upload(f, (p) => (item.pct = p))
+      const a = await postsApi.upload(acc, f, (p) => (item.pct = p))
+      if (form.account !== acc) continue // 上傳途中換了帳號
       if (maxMedia.value === 1) form.media = [a]
       else form.media.push(a)
     } catch {
@@ -104,7 +129,7 @@ const aiBrief = ref('')
 const aiBusy = ref(false)
 const aiOpen = ref(false)
 async function runAI() {
-  if (!aiBrief.value.trim()) return
+  if (!aiBrief.value.trim() || form.account == null) return
   if (form.caption.trim()) {
     const ok = await ElMessageBox.confirm('要用 AI 的版本取代目前的文案嗎？', 'AI 幫寫', {
       confirmButtonText: '取代',
@@ -114,7 +139,7 @@ async function runAI() {
   }
   aiBusy.value = true
   try {
-    form.caption = (await postsApi.caption(aiBrief.value, form.kind)).caption
+    form.caption = (await postsApi.caption(form.account, aiBrief.value, form.kind)).caption
     aiOpen.value = false
   } finally {
     aiBusy.value = false
@@ -133,11 +158,17 @@ const disabledDate = (d: Date) => d.getTime() < new Date().setHours(0, 0, 0, 0)
 // ---- 送出 ----
 const saving = ref<SaveAction | null>(null)
 async function submit(action: SaveAction) {
+  if (form.account == null) {
+    ElMessage.warning('請選擇要發佈的 IG 帳號')
+    return
+  }
+  accounts.remember(form.account)
   saving.value = action
   try {
     await postsApi.save(
       {
         id: form.id || undefined,
+        igAccountId: form.account,
         kind: form.kind,
         caption: form.kind === 'story' ? '' : form.caption,
         mediaIds: form.media.map((m) => m.id),
@@ -213,6 +244,11 @@ const title = computed(() => {
           <h4>貼文成效</h4>
           <PostInsights :post="post" @updated="(p) => emit('insightsUpdated', p)" />
         </section>
+
+        <div class="field">
+          <label>發佈到</label>
+          <AccountSelect v-model="form.account" :disabled="readonly" class="acc-select" />
+        </div>
 
         <div class="field">
           <label>類型</label>
@@ -308,7 +344,13 @@ const title = computed(() => {
       </div>
 
       <div v-show="!isMobile || mobileTab === 'preview'" class="preview">
-        <IgPreview :kind="form.kind" :media="form.media" :caption="form.caption" />
+        <IgPreview
+          :kind="form.kind"
+          :media="form.media"
+          :caption="form.caption"
+          :username="account?.username"
+          :avatar="account?.profilePic"
+        />
       </div>
     </div>
 
@@ -539,5 +581,9 @@ const title = computed(() => {
   .footer .el-button + .el-button {
     margin-left: 0;
   }
+}
+.acc-select {
+  width: 260px;
+  max-width: 100%;
 }
 </style>

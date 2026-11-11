@@ -34,19 +34,38 @@ type ingested struct {
 	contactID int64
 	needsProf bool
 	igsid     string
-	token     string
+	accountID int64
 	msg       Message
 	isInbound bool
 }
 
+// connectedAccount 回 webhook entry.id 對應的已連結帳號（存在、啟用、掛著連線）；不是則回 0。
+// 未連結的帳號一律不收、也不自動建帳號。
+func connectedAccount(ctx context.Context, tx pgx.Tx, igUserID string) (int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx, `SELECT id FROM ig_accounts WHERE ig_user_id = $1 AND active AND connection_id IS NOT NULL`, igUserID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
 // processPayload 在呼叫端的交易內把一個 webhook payload 寫進領域資料表。
-func processPayload(ctx context.Context, tx pgx.Tx, raw []byte) ([]ingested, error) {
+// rejected 非空表示有 entry 屬於未連結的帳號（略過不收，事件記這個錯誤）。
+func processPayload(ctx context.Context, tx pgx.Tx, raw []byte) (out []ingested, rejected string, err error) {
 	var p ig.Payload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, fmt.Errorf("decode payload: %w", err)
+		return nil, "", fmt.Errorf("decode payload: %w", err)
 	}
-	var out []ingested
 	for _, e := range p.Entry {
+		accountID, err := connectedAccount(ctx, tx, e.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if accountID == 0 {
+			rejected = UnconnectedAccount
+			continue
+		}
 		for _, m := range e.Messaging {
 			var (
 				r   ingested
@@ -55,26 +74,30 @@ func processPayload(ctx context.Context, tx pgx.Tx, raw []byte) ([]ingested, err
 			)
 			switch {
 			case m.Read != nil:
-				r, ok, err = ingestRead(ctx, tx, e.ID, m)
+				r, ok, err = ingestRead(ctx, tx, accountID, e.ID, m)
 			case m.Reaction != nil:
-				r, ok, err = ingestReaction(ctx, tx, e.ID, m)
+				r, ok, err = ingestReaction(ctx, tx, accountID, e.ID, m)
 			case m.Message != nil && m.Message.IsDeleted:
-				r, ok, err = ingestUnsend(ctx, tx, m)
+				r, ok, err = ingestUnsend(ctx, tx, accountID, m)
 			case m.Message != nil && m.Message.MID != "":
-				r, ok, err = ingestMessage(ctx, tx, e.ID, m)
+				r, ok, err = ingestMessage(ctx, tx, accountID, m)
 			}
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if ok {
+				r.accountID = accountID
 				out = append(out, r)
 			}
 		}
 	}
-	return out, nil
+	return out, rejected, nil
 }
 
-func ingestMessage(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
+// ingestMessage：顧客訊息，或我方在 IG App 直接回的 echo。
+// TODO：Unified Login 沒有 message_echoes 訂閱欄位，echo 可能不會再來；處理保留但不依賴它
+// （後台送出的訊息在送出當下就落庫了）。
+func ingestMessage(ctx context.Context, tx pgx.Tx, accountID int64, m ig.Messaging) (ingested, bool, error) {
 	r := ingested{event: "created"}
 	inbound := !m.Message.IsEcho
 	r.isInbound = inbound
@@ -85,14 +108,6 @@ func ingestMessage(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Mess
 	ts := time.UnixMilli(m.Timestamp)
 	if m.Timestamp == 0 {
 		ts = time.Now()
-	}
-
-	var accountID int64
-	if err := tx.QueryRow(ctx, `
-INSERT INTO ig_accounts (ig_user_id) VALUES ($1)
-ON CONFLICT (ig_user_id) DO UPDATE SET ig_user_id = EXCLUDED.ig_user_id
-RETURNING id, access_token`, accountIGID).Scan(&accountID, &r.token); err != nil {
-		return r, false, err
 	}
 
 	var username string
@@ -128,7 +143,7 @@ RETURNING id`, r.contactID).Scan(&r.convID); err != nil {
 		sender, direction = "human", "out" // 從 IG App 直接回的
 	}
 
-	r.msg = Message{ConversationID: r.convID, Direction: direction, SenderType: sender, Kind: kind, Text: text, MediaURL: media, CreatedAt: ts}
+	r.msg = Message{ConversationID: r.convID, IGAccountID: accountID, Direction: direction, SenderType: sender, Kind: kind, Text: text, MediaURL: media, CreatedAt: ts}
 	err := tx.QueryRow(ctx, `
 INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, kind, text, media_url, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -157,11 +172,11 @@ WHERE id = $1`, r.convID, ts, text)
 }
 
 // convOf 找出（我方帳號, 顧客 igsid）對應的對話；沒有就回 0。
-func convOf(ctx context.Context, tx pgx.Tx, accountIGID, igsid string) (int64, error) {
+func convOf(ctx context.Context, tx pgx.Tx, accountID int64, igsid string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `
-SELECT c.id FROM conversations c JOIN contacts ct ON ct.id = c.contact_id JOIN ig_accounts a ON a.id = ct.ig_account_id
-WHERE a.ig_user_id = $1 AND ct.igsid = $2`, accountIGID, igsid).Scan(&id)
+SELECT c.id FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
+WHERE ct.ig_account_id = $1 AND ct.igsid = $2`, accountID, igsid).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -169,11 +184,11 @@ WHERE a.ig_user_id = $1 AND ct.igsid = $2`, accountIGID, igsid).Scan(&id)
 }
 
 // ingestRead：顧客已讀。只記時間，之前我方送出的訊息都算已讀。
-func ingestRead(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
+func ingestRead(ctx context.Context, tx pgx.Tx, accountID int64, accountIGID string, m ig.Messaging) (ingested, bool, error) {
 	if m.Sender.ID == accountIGID {
 		return ingested{}, false, nil // 我方已讀顧客訊息，後台自己有未讀數
 	}
-	convID, err := convOf(ctx, tx, accountIGID, m.Sender.ID)
+	convID, err := convOf(ctx, tx, accountID, m.Sender.ID)
 	if err != nil || convID == 0 {
 		return ingested{}, false, err
 	}
@@ -186,7 +201,7 @@ func ingestRead(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messagi
 }
 
 // ingestReaction：只記顧客按的表情（我方在 IG App 按的不顯示）。
-func ingestReaction(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
+func ingestReaction(ctx context.Context, tx pgx.Tx, accountID int64, accountIGID string, m ig.Messaging) (ingested, bool, error) {
 	if m.Sender.ID == accountIGID || m.Reaction.MID == "" {
 		return ingested{}, false, nil
 	}
@@ -198,8 +213,10 @@ func ingestReaction(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Mes
 		}
 	}
 	r := ingested{event: "updated"}
-	err := tx.QueryRow(ctx, `UPDATE messages SET reaction = $2 WHERE ig_mid = $1 RETURNING id, conversation_id`,
-		m.Reaction.MID, emoji).Scan(&r.msgID, &r.convID)
+	err := tx.QueryRow(ctx, `
+UPDATE messages m SET reaction = $2 FROM conversations c, contacts ct
+WHERE m.ig_mid = $1 AND c.id = m.conversation_id AND ct.id = c.contact_id AND ct.ig_account_id = $3
+RETURNING m.id, m.conversation_id`, m.Reaction.MID, emoji, accountID).Scan(&r.msgID, &r.convID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, false, nil
 	}
@@ -225,7 +242,7 @@ func reactionEmoji(code string) string {
 }
 
 // ingestUnsend：顧客收回。清掉內容（尊重對方收回），只留「已收回」紀錄。
-func ingestUnsend(ctx context.Context, tx pgx.Tx, m ig.Messaging) (ingested, bool, error) {
+func ingestUnsend(ctx context.Context, tx pgx.Tx, accountID int64, m ig.Messaging) (ingested, bool, error) {
 	r := ingested{event: "updated"}
 	ts := time.UnixMilli(m.Timestamp)
 	if m.Timestamp == 0 {
@@ -234,9 +251,10 @@ func ingestUnsend(ctx context.Context, tx pgx.Tx, m ig.Messaging) (ingested, boo
 	var created time.Time
 	err := tx.QueryRow(ctx, `
 UPDATE messages m SET deleted_at = $2, text = '', media_url = '', media_file = '', reaction = ''
-FROM (SELECT id, media_file FROM messages WHERE ig_mid = $1 AND direction = 'in' AND deleted_at IS NULL) old
+FROM (SELECT x.id, x.media_file FROM messages x JOIN conversations c ON c.id = x.conversation_id JOIN contacts ct ON ct.id = c.contact_id
+      WHERE x.ig_mid = $1 AND x.direction = 'in' AND x.deleted_at IS NULL AND ct.ig_account_id = $3) old
 WHERE m.id = old.id
-RETURNING m.id, m.conversation_id, old.media_file, m.created_at`, m.Message.MID, ts).Scan(&r.msgID, &r.convID, &r.oldFile, &created)
+RETURNING m.id, m.conversation_id, old.media_file, m.created_at`, m.Message.MID, ts, accountID).Scan(&r.msgID, &r.convID, &r.oldFile, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, false, nil
 	}
@@ -266,13 +284,17 @@ func attachmentLabel(t string) string {
 	}
 }
 
-// fillProfile 在交易外補抓顧客的 IG 名稱與頭像。
-func (s *Service) fillProfile(ctx context.Context, contactID int64, token, igsid string) {
-	if token == "" {
-		token = s.DefaultToken
+// fillProfile 在交易外補抓顧客的 IG 名稱與頭像（用該帳號連線的 token）。
+// TODO：graph.facebook.com 上 IGSID profile 的欄位未以真帳號驗證。
+func (s *Service) fillProfile(ctx context.Context, contactID, accountID int64, igsid string) {
+	_, token, err := s.credentials(ctx, accountID)
+	if err != nil {
+		log.Printf("inbox: profile %s: %v", igsid, err)
+		return
 	}
 	p, err := s.IG.Profile(ctx, token, igsid)
 	if err != nil {
+		s.noteAPIError(ctx, accountID, err)
 		log.Printf("inbox: profile %s: %v", igsid, err)
 		return
 	}

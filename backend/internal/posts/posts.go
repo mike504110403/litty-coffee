@@ -19,6 +19,9 @@ import (
 var (
 	ErrNotFound  = errors.New("找不到貼文")
 	ErrImmutable = errors.New("貼文發佈中或已發佈，不能修改")
+	// ErrMediaAccount：貼文用到的媒體必須是同一個 IG 帳號上傳的
+	ErrMediaAccount = errors.New("媒體不屬於這篇貼文的 IG 帳號，請重新上傳")
+	ErrNoAccount    = errors.New("請選擇要發佈的 IG 帳號")
 )
 
 const (
@@ -29,6 +32,7 @@ const (
 
 type Post struct {
 	ID            int64         `json:"id"`
+	IGAccountID   int64         `json:"igAccountId"` // 發佈到哪個 IG 帳號
 	Kind          string        `json:"kind"`
 	Caption       string        `json:"caption"`
 	MediaIDs      []int64       `json:"mediaIds"`
@@ -82,7 +86,7 @@ func (s *Service) Validate(ctx context.Context, p *Post, schedule bool, now time
 	if n := CountHashtags(p.Caption); n > MaxHashtags {
 		return fmt.Errorf("hashtag 最多 %d 個（目前 %d 個）", MaxHashtags, n)
 	}
-	assets, err := s.Media.Get(ctx, p.MediaIDs)
+	assets, err := s.mediaFor(ctx, p)
 	if err != nil {
 		return err
 	}
@@ -131,11 +135,28 @@ func (s *Service) Validate(ctx context.Context, p *Post, schedule bool, now time
 	return nil
 }
 
-const postCols = `id, kind, caption, media_ids, scheduled_at, status, attempts, next_attempt_at, permalink, error, published_at, updated_at, ig_container_id, insights, insights_fetched_at, insights_error, ig_media_id`
+// mediaFor 讀貼文的媒體並確認都屬於貼文的帳號。
+func (s *Service) mediaFor(ctx context.Context, p *Post) ([]media.Asset, error) {
+	if p.IGAccountID <= 0 {
+		return nil, ErrNoAccount
+	}
+	assets, err := s.Media.Get(ctx, p.MediaIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range assets {
+		if a.IGAccountID != p.IGAccountID {
+			return nil, ErrMediaAccount
+		}
+	}
+	return assets, nil
+}
+
+const postCols = `id, ig_account_id, kind, caption, media_ids, scheduled_at, status, attempts, next_attempt_at, permalink, error, published_at, updated_at, ig_container_id, insights, insights_fetched_at, insights_error, ig_media_id`
 
 func scanPost(row pgx.Row) (Post, error) {
 	var p Post
-	err := row.Scan(&p.ID, &p.Kind, &p.Caption, &p.MediaIDs, &p.ScheduledAt, &p.Status, &p.Attempts, &p.NextAttemptAt,
+	err := row.Scan(&p.ID, &p.IGAccountID, &p.Kind, &p.Caption, &p.MediaIDs, &p.ScheduledAt, &p.Status, &p.Attempts, &p.NextAttemptAt,
 		&p.Permalink, &p.Error, &p.PublishedAt, &p.UpdatedAt, &p.containerID, &p.Insights, &p.InsightsAt, &p.InsightsError, &p.igMediaID)
 	p.InsightsRefresh = canRefreshInsights(p, time.Now())
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -160,14 +181,15 @@ func (s *Service) withMedia(ctx context.Context, p Post) (Post, error) {
 type ListFilter struct {
 	From, To *time.Time
 	Status   string
+	Accounts []int64 // 只列這些 IG 帳號；nil＝全部
 }
 
 // List 回傳排程時間落在區間內的貼文；草稿（無時間）一律附上。
 func (s *Service) List(ctx context.Context, f ListFilter) ([]Post, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+postCols+` FROM scheduled_posts
-WHERE ($3 = '' OR status = $3)
+WHERE ($3 = '' OR status = $3) AND ($4::bigint[] IS NULL OR ig_account_id = ANY($4))
   AND (scheduled_at IS NULL OR (($1::timestamptz IS NULL OR scheduled_at >= $1) AND ($2::timestamptz IS NULL OR scheduled_at < $2)))
-ORDER BY scheduled_at NULLS FIRST, id`, f.From, f.To, f.Status)
+ORDER BY scheduled_at NULLS FIRST, id`, f.From, f.To, f.Status, f.Accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +243,7 @@ func (s *Service) Save(ctx context.Context, p Post, action string, now time.Time
 		if p.MediaIDs == nil {
 			p.MediaIDs = []int64{}
 		}
-		if _, err := s.Media.Get(ctx, p.MediaIDs); err != nil {
+		if _, err := s.mediaFor(ctx, &p); err != nil {
 			return p, err
 		}
 	} else if err := s.Validate(ctx, &p, true, now); err != nil {
@@ -238,15 +260,15 @@ func (s *Service) Save(ctx context.Context, p Post, action string, now time.Time
 	var err error
 	if p.ID == 0 {
 		saved, err = scanPost(s.DB.QueryRow(ctx, `
-INSERT INTO scheduled_posts (kind, caption, media_ids, scheduled_at, status, next_attempt_at)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+postCols, p.Kind, p.Caption, p.MediaIDs, p.ScheduledAt, status, next))
+INSERT INTO scheduled_posts (kind, caption, media_ids, scheduled_at, status, next_attempt_at, ig_account_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+postCols, p.Kind, p.Caption, p.MediaIDs, p.ScheduledAt, status, next, p.IGAccountID))
 	} else {
 		// 只有 draft / scheduled / failed 能改；重新排程會清掉重試狀態與舊容器
 		saved, err = scanPost(s.DB.QueryRow(ctx, `
 UPDATE scheduled_posts SET kind=$2, caption=$3, media_ids=$4, scheduled_at=$5, status=$6, next_attempt_at=$7,
-  attempts=0, error='', ig_container_id='', updated_at=now()
+  attempts=0, error='', ig_container_id='', updated_at=now(), ig_account_id=$8
 WHERE id=$1 AND status IN ('draft','scheduled','failed') RETURNING `+postCols,
-			p.ID, p.Kind, p.Caption, p.MediaIDs, p.ScheduledAt, status, next))
+			p.ID, p.Kind, p.Caption, p.MediaIDs, p.ScheduledAt, status, next, p.IGAccountID))
 		if errors.Is(err, ErrNotFound) {
 			if _, gerr := s.Get(ctx, p.ID); gerr == nil {
 				return p, ErrImmutable
@@ -277,9 +299,10 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// CountUpcoming 是總覽「待發排程」的數字。
-func (s *Service) CountUpcoming(ctx context.Context) (int, error) {
+// CountUpcoming 是總覽「待發排程」的數字（accounts 為 nil＝全部帳號）。
+func (s *Service) CountUpcoming(ctx context.Context, accounts []int64) (int, error) {
 	var n int
-	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM scheduled_posts WHERE status IN ('scheduled','publishing')`).Scan(&n)
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM scheduled_posts WHERE status IN ('scheduled','publishing')
+  AND ($1::bigint[] IS NULL OR ig_account_id = ANY($1))`, accounts).Scan(&n)
 	return n, err
 }

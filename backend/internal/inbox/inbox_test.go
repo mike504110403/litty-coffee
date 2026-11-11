@@ -11,6 +11,7 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
+	"github.com/mike504110403/litty-coffee/backend/internal/testdb"
 )
 
 func TestWindowCheck(t *testing.T) {
@@ -53,9 +54,11 @@ func newTestService(t *testing.T) (*Service, *ig.Fake) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE webhook_events, messages, conversations, contacts, ig_accounts RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE webhook_events, messages, conversations, contacts, ig_accounts, ig_connections RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
+	// webhook 只收已連結的帳號：測試的我方帳號 "acct" 先連好
+	testdb.ConnectedAccount(t, pool, "acct")
 	fake := ig.NewFake()
 	return NewService(pool, fake, realtime.NewHub()), fake
 }

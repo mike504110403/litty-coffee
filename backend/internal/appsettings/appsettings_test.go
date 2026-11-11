@@ -218,7 +218,13 @@ func TestLiveOAuthSwapsCredentialsWithoutRestart(t *testing.T) {
 	if err := s.Update(ctx, map[string]string{KeyIGAppID: "123", KeyIGAppSecret: "secret-one-1234"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !o.Configured() || !strings.Contains(o.AuthorizeURL("st"), "client_id=123") {
+	if o.Configured() {
+		t.Fatal("缺配置 ID 應仍為未設定")
+	}
+	if err := s.Update(ctx, map[string]string{KeyIGConfigID: "777"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !o.Configured() || !strings.Contains(o.AuthorizeURL("st"), "client_id=123") || !strings.Contains(o.AuthorizeURL("st"), "config_id=777") {
 		t.Fatalf("存檔後應立即用新 App ID: %s", o.AuthorizeURL("st"))
 	}
 	if err := s.Update(ctx, map[string]string{KeyIGAppID: "456"}, nil); err != nil {

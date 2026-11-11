@@ -3,7 +3,7 @@ import { nextTick, ref } from 'vue'
 import { Promotion, RefreshLeft } from '@element-plus/icons-vue'
 import { automationApi, intentLabels, type Outcome } from '@/api/automation'
 
-defineProps<{ aiConfigured: boolean }>()
+const props = defineProps<{ aiConfigured: boolean; accountId: number }>()
 
 interface Line {
   fromCustomer: boolean
@@ -35,7 +35,7 @@ async function send(text = draft.value) {
   busy.value = true
   await scrollDown()
   try {
-    const { outcome, elapsedMs } = await automationApi.test(text, history)
+    const { outcome, elapsedMs } = await automationApi.test(props.accountId, text, history)
     lines.value.push({ fromCustomer: false, text: outcome.reply, outcome, elapsedMs })
   } catch {
     lines.value.pop()

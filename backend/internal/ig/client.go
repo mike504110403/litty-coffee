@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,7 +18,8 @@ type Profile struct {
 	ProfilePic string `json:"profile_pic"`
 }
 
-// Messenger 抽象 IG 送訊／查人；正式環境用 Client，開發期用 Fake。
+// Messenger 抽象 IG 送訊／查人；正式環境用 Client（graph.facebook.com，Unified Login 的 SUAT），開發期用 Fake。
+// TODO：{ig-id}/messages 與用戶 profile 在 graph.facebook.com 上的行為未以真帳號驗證。
 type Messenger interface {
 	SendText(ctx context.Context, accountID, token, igsid, text string, humanAgent bool) (mid string, err error)
 	Profile(ctx context.Context, token, igsid string) (Profile, error)
@@ -37,6 +39,29 @@ type apiError struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error"`
+}
+
+// APIError 是 Graph API 的錯誤回應。
+type APIError struct {
+	Status  int
+	Code    int
+	Message string
+}
+
+func (e *APIError) Error() string {
+	if e.Code != 0 {
+		return fmt.Sprintf("instagram api %d: %s (code %d)", e.Status, e.Message, e.Code)
+	}
+	return fmt.Sprintf("instagram api %d: %s", e.Status, e.Message)
+}
+
+// TokenInvalid 回這個錯誤是否表示 token 失效（code 190：過期、被撤銷、店家移除 app、帳號移到別的業務組合等）。
+func (e *APIError) TokenInvalid() bool { return e.Code == 190 || e.Status == http.StatusUnauthorized }
+
+// IsTokenInvalid 判斷任意錯誤是否為 token 失效。
+func IsTokenInvalid(err error) bool {
+	var e *APIError
+	return errors.As(err, &e) && e.TokenInvalid()
 }
 
 func (c *Client) SendText(ctx context.Context, accountID, token, igsid, text string, humanAgent bool) (string, error) {
@@ -88,7 +113,7 @@ func (c *Client) do(ctx context.Context, method, u, token string, in, out any) e
 	if res.StatusCode >= 300 {
 		var e apiError
 		_ = json.NewDecoder(res.Body).Decode(&e)
-		return fmt.Errorf("instagram api %d: %s (code %d)", res.StatusCode, e.Error.Message, e.Error.Code)
+		return &APIError{Status: res.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
 	}
 	return json.NewDecoder(res.Body).Decode(out)
 }

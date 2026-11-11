@@ -76,8 +76,13 @@ type Summary struct {
 	TopRules []RuleHit  `json:"topRules"`
 }
 
-// Summary 統計最近 days 天（含今天，依店家時區切日）。
-func (s *Service) Summary(ctx context.Context, days int, now time.Time) (Summary, error) {
+// convIn 回「對話屬於 accounts 參數（第 n 個佔位符）內帳號」的條件；參數為 NULL＝全部帳號。
+func convIn(col, n string) string {
+	return `(` + n + `::bigint[] IS NULL OR ` + col + ` IN (SELECT c.id FROM conversations c JOIN contacts ct ON ct.id = c.contact_id WHERE ct.ig_account_id = ANY(` + n + `)))`
+}
+
+// Summary 統計最近 days 天（含今天，依店家時區切日）；accounts 為 nil＝全部帳號，否則只算這些 IG 帳號。
+func (s *Service) Summary(ctx context.Context, days int, now time.Time, accounts []int64) (Summary, error) {
 	if days < 1 {
 		days = 1
 	}
@@ -89,26 +94,26 @@ func (s *Service) Summary(ctx context.Context, days int, now time.Time) (Summary
 
 	sum := Summary{From: from, To: to, Days: days}
 	var err error
-	if sum.Current, err = s.period(ctx, from, to); err != nil {
+	if sum.Current, err = s.period(ctx, from, to, accounts); err != nil {
 		return sum, err
 	}
-	if sum.Previous, err = s.period(ctx, prevFrom, from); err != nil {
+	if sum.Previous, err = s.period(ctx, prevFrom, from, accounts); err != nil {
 		return sum, err
 	}
-	if sum.Daily, err = s.daily(ctx, from, days); err != nil {
+	if sum.Daily, err = s.daily(ctx, from, days, accounts); err != nil {
 		return sum, err
 	}
-	if sum.Intents, err = s.intents(ctx, from, to); err != nil {
+	if sum.Intents, err = s.intents(ctx, from, to, accounts); err != nil {
 		return sum, err
 	}
-	if sum.Hours, err = s.hours(ctx, from, to); err != nil {
+	if sum.Hours, err = s.hours(ctx, from, to, accounts); err != nil {
 		return sum, err
 	}
-	sum.TopRules, err = s.topRules(ctx)
+	sum.TopRules, err = s.topRules(ctx, accounts)
 	return sum, err
 }
 
-func (s *Service) period(ctx context.Context, from, to time.Time) (Period, error) {
+func (s *Service) period(ctx context.Context, from, to time.Time, accounts []int64) (Period, error) {
 	var p Period
 	t := &p.Totals
 	err := s.DB.QueryRow(ctx, `
@@ -118,12 +123,13 @@ SELECT
   count(*) FILTER (WHERE direction = 'out' AND sender_type = 'human'),
   count(DISTINCT conversation_id) FILTER (WHERE direction = 'in'),
   count(DISTINCT conversation_id) FILTER (WHERE direction = 'out' AND sender_type = 'human')
-FROM messages WHERE created_at >= $1 AND created_at < $2`, from, to).
+FROM messages WHERE created_at >= $1 AND created_at < $2 AND `+convIn("conversation_id", "$3"), from, to, accounts).
 		Scan(&t.Inbound, &t.OutboundAuto, &t.OutboundHuman, &t.ActiveContacts, &t.HumanConvs)
 	if err != nil {
 		return p, err
 	}
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM contacts WHERE first_seen_at >= $1 AND first_seen_at < $2`, from, to).
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM contacts WHERE first_seen_at >= $1 AND first_seen_at < $2
+  AND ($3::bigint[] IS NULL OR ig_account_id = ANY($3))`, from, to, accounts).
 		Scan(&t.NewContacts); err != nil {
 		return p, err
 	}
@@ -135,7 +141,7 @@ FROM messages WHERE created_at >= $1 AND created_at < $2`, from, to).
 WITH m AS (
   SELECT id, conversation_id, direction, created_at,
          lag(direction) OVER (PARTITION BY conversation_id ORDER BY created_at, id) AS prev_dir
-  FROM messages
+  FROM messages WHERE `+convIn("conversation_id", "$3")+`
 ), starts AS (
   SELECT id, conversation_id, created_at FROM m
   WHERE direction = 'in' AND (prev_dir IS NULL OR prev_dir = 'out') AND created_at >= $1 AND created_at < $2
@@ -152,11 +158,11 @@ SELECT count(*), count(secs),
        avg(secs), percentile_cont(0.5) WITHIN GROUP (ORDER BY secs),
        avg(secs) FILTER (WHERE sender_type IN ('ai','bot')),
        avg(secs) FILTER (WHERE sender_type = 'human')
-FROM resp`, from, to).Scan(&r.Turns, &r.Answered, &r.AvgSecs, &r.MedianSecs, &r.AutoAvg, &r.HumanAvg)
+FROM resp`, from, to, accounts).Scan(&r.Turns, &r.Answered, &r.AvgSecs, &r.MedianSecs, &r.AutoAvg, &r.HumanAvg)
 	return p, err
 }
 
-func (s *Service) daily(ctx context.Context, from time.Time, days int) ([]DayPoint, error) {
+func (s *Service) daily(ctx context.Context, from time.Time, days int, accounts []int64) ([]DayPoint, error) {
 	rows, err := s.DB.Query(ctx, `
 WITH d AS (
   SELECT generate_series(0, $2 - 1) AS i
@@ -166,8 +172,8 @@ SELECT to_char(($1::timestamptz AT TIME ZONE $3)::date + d.i, 'YYYY-MM-DD'),
        count(m.id) FILTER (WHERE m.direction = 'out' AND m.sender_type IN ('ai','bot')),
        count(m.id) FILTER (WHERE m.direction = 'out' AND m.sender_type = 'human')
 FROM d LEFT JOIN messages m
-  ON (m.created_at AT TIME ZONE $3)::date = ($1::timestamptz AT TIME ZONE $3)::date + d.i
-GROUP BY d.i ORDER BY d.i`, from, days, s.Loc.String())
+  ON (m.created_at AT TIME ZONE $3)::date = ($1::timestamptz AT TIME ZONE $3)::date + d.i AND `+convIn("m.conversation_id", "$4")+`
+GROUP BY d.i ORDER BY d.i`, from, days, s.Loc.String(), accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -183,11 +189,11 @@ GROUP BY d.i ORDER BY d.i`, from, days, s.Loc.String())
 	return out, rows.Err()
 }
 
-func (s *Service) intents(ctx context.Context, from, to time.Time) ([]Count, error) {
+func (s *Service) intents(ctx context.Context, from, to time.Time, accounts []int64) ([]Count, error) {
 	rows, err := s.DB.Query(ctx, `
 SELECT meta->>'intent', count(*) FROM messages
-WHERE direction = 'in' AND meta ? 'intent' AND created_at >= $1 AND created_at < $2
-GROUP BY 1 ORDER BY 2 DESC`, from, to)
+WHERE direction = 'in' AND meta ? 'intent' AND created_at >= $1 AND created_at < $2 AND `+convIn("conversation_id", "$3")+`
+GROUP BY 1 ORDER BY 2 DESC`, from, to, accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -203,11 +209,12 @@ GROUP BY 1 ORDER BY 2 DESC`, from, to)
 	return out, rows.Err()
 }
 
-func (s *Service) hours(ctx context.Context, from, to time.Time) ([]int, error) {
+func (s *Service) hours(ctx context.Context, from, to time.Time, accounts []int64) ([]int, error) {
 	out := make([]int, 24)
 	rows, err := s.DB.Query(ctx, `
 SELECT extract(hour FROM created_at AT TIME ZONE $3)::int, count(*) FROM messages
-WHERE direction = 'in' AND created_at >= $1 AND created_at < $2 GROUP BY 1`, from, to, s.Loc.String())
+WHERE direction = 'in' AND created_at >= $1 AND created_at < $2 AND `+convIn("conversation_id", "$4")+` GROUP BY 1`,
+		from, to, s.Loc.String(), accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -222,8 +229,12 @@ WHERE direction = 'in' AND created_at >= $1 AND created_at < $2 GROUP BY 1`, fro
 	return out, rows.Err()
 }
 
-func (s *Service) topRules(ctx context.Context) ([]RuleHit, error) {
-	rows, err := s.DB.Query(ctx, `SELECT name, hit_count FROM auto_rules WHERE hit_count > 0 ORDER BY hit_count DESC, name LIMIT 5`)
+// topRules 只算帳號自己的規則（範本 ig_account_id IS NULL 不會被命中）。
+func (s *Service) topRules(ctx context.Context, accounts []int64) ([]RuleHit, error) {
+	// 多個帳號的同名規則（多半是同一份範本複製出來的）合併計算
+	rows, err := s.DB.Query(ctx, `SELECT name, sum(hit_count)::bigint FROM auto_rules
+WHERE hit_count > 0 AND ig_account_id IS NOT NULL AND ($1::bigint[] IS NULL OR ig_account_id = ANY($1))
+GROUP BY name ORDER BY 2 DESC, name LIMIT 5`, accounts)
 	if err != nil {
 		return nil, err
 	}

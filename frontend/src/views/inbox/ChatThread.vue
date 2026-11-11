@@ -3,7 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, Promotion, Check, RefreshLeft } from '@element-plus/icons-vue'
 import { contactLabel, type Conversation, type Message } from '@/api/inbox'
 import ContactAvatar from '@/components/ContactAvatar.vue'
+import AccountTag from '@/components/AccountTag.vue'
+import { useAccountsStore } from '@/stores/accounts'
 import { clockTime, dayKey, dayLabel } from '@/utils/time'
+
+const accountsStore = useAccountsStore()
 
 const props = defineProps<{
   conversation: Conversation
@@ -141,7 +145,12 @@ const handler = computed({
       <ContactAvatar :contact="conversation.contact" :size="38" class="clickable" @click="emit('open-contact')" />
       <div class="who clickable" title="顧客資料" @click="emit('open-contact')">
         <div class="name">{{ contactLabel(conversation.contact) }}</div>
-        <div v-if="conversation.contact.username" class="handle">@{{ conversation.contact.username }}</div>
+        <div v-if="conversation.contact.username || accountsStore.multi" class="handle">
+          <span v-if="conversation.contact.username">@{{ conversation.contact.username }}</span>
+          <span v-if="accountsStore.multi" class="via">
+            傳給 <AccountTag :id="conversation.igAccountId" />
+          </span>
+        </div>
       </div>
       <el-segmented
         v-model="handler"
@@ -450,5 +459,9 @@ const handler = computed({
   .t-foot {
     padding-bottom: calc(12px + env(safe-area-inset-bottom));
   }
+}
+.via {
+  margin-left: 6px;
+  white-space: nowrap;
 }
 </style>

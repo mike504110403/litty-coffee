@@ -3,7 +3,14 @@ import { computed, ref, watch } from 'vue'
 import type { MediaAsset, PostKind } from '@/api/posts'
 
 // 仿 IG 版面的預覽；不追求像素級一致，只讓店家看出裁切與文案斷行
-const props = defineProps<{ kind: PostKind; media: MediaAsset[]; caption: string; username?: string }>()
+// username／avatar 是要發佈的那個 IG 帳號
+const props = defineProps<{ kind: PostKind; media: MediaAsset[]; caption: string; username?: string; avatar?: string }>()
+const avatarFailed = ref(false)
+watch(
+  () => props.avatar,
+  () => (avatarFailed.value = false),
+)
+const avatarSrc = computed(() => (props.avatar && !avatarFailed.value ? props.avatar : '/favicon.svg'))
 
 const idx = ref(0)
 watch(
@@ -27,7 +34,7 @@ const ratio = computed(() => {
 <template>
   <div class="ig" :class="kind">
     <div v-if="kind !== 'story'" class="ig-head">
-      <img src="/favicon.svg" alt="" class="ig-avatar" />
+      <img :src="avatarSrc" alt="" class="ig-avatar" @error="avatarFailed = true" />
       <strong>{{ username || 'littycoffee' }}</strong>
     </div>
     <div class="ig-media" :style="{ aspectRatio: ratio }">
@@ -44,7 +51,7 @@ const ratio = computed(() => {
         </div>
       </template>
       <div v-if="kind === 'story'" class="story-bar">
-        <img src="/favicon.svg" alt="" class="ig-avatar" />
+        <img :src="avatarSrc" alt="" class="ig-avatar" @error="avatarFailed = true" />
         <strong>{{ username || 'littycoffee' }}</strong>
       </div>
     </div>

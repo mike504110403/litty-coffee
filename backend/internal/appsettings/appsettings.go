@@ -1,4 +1,4 @@
-// Package appsettings 是「後台可改、立即生效」的執行期設定：IG Meta App 憑證與 Claude AI 設定。
+// Package appsettings 是「後台可改、立即生效」的執行期設定：Meta App 憑證（含 Facebook 登入配置 ID）與 Claude AI 設定。
 //
 // 優先序：DB（app_settings 表）> .env。secret 類欄位以 AES-256-GCM 加密後存 DB（見 internal/secrets）。
 // Store 持有一份「有效值」快照（RWMutex 保護、讀取回傳複本）；儲存時先寫 DB，成功才換快照並通知監聽者。
@@ -22,6 +22,7 @@ import (
 const (
 	KeyIGAppID       = "ig_app_id"
 	KeyIGAppSecret   = "ig_app_secret"
+	KeyIGConfigID    = "ig_config_id"
 	KeyIGVerifyToken = "ig_verify_token"
 	KeyAnthropicKey  = "anthropic_api_key"
 	KeyAIModel       = "ai_model"
@@ -39,6 +40,7 @@ type Field struct {
 var Fields = []Field{
 	{KeyIGAppID, false},
 	{KeyIGAppSecret, true},
+	{KeyIGConfigID, false},
 	{KeyIGVerifyToken, true},
 	{KeyAnthropicKey, true},
 	{KeyAIModel, false},
@@ -65,6 +67,7 @@ const (
 type Values struct {
 	IGAppID       string
 	IGAppSecret   string
+	IGConfigID    string // Facebook 登入的「配置 ID」（Unified Login 授權網址的 config_id）
 	IGVerifyToken string
 	AnthropicKey  string
 	AIModel       string
@@ -77,6 +80,8 @@ func (v *Values) set(key, val string) {
 		v.IGAppID = val
 	case KeyIGAppSecret:
 		v.IGAppSecret = val
+	case KeyIGConfigID:
+		v.IGConfigID = val
 	case KeyIGVerifyToken:
 		v.IGVerifyToken = val
 	case KeyAnthropicKey:
@@ -94,6 +99,8 @@ func (v Values) get(key string) string {
 		return v.IGAppID
 	case KeyIGAppSecret:
 		return v.IGAppSecret
+	case KeyIGConfigID:
+		return v.IGConfigID
 	case KeyIGVerifyToken:
 		return v.IGVerifyToken
 	case KeyAnthropicKey:
@@ -241,10 +248,10 @@ func Validate(key, val string) error {
 		return invalid("%s 太長", label(key))
 	}
 	switch key {
-	case KeyIGAppID:
+	case KeyIGAppID, KeyIGConfigID:
 		for _, r := range val {
 			if r < '0' || r > '9' {
-				return invalid("Instagram App ID 應為純數字")
+				return invalid("%s 應為純數字", label(key))
 			}
 		}
 	case KeyAIEffort:
@@ -260,9 +267,11 @@ func Validate(key, val string) error {
 func label(key string) string {
 	switch key {
 	case KeyIGAppID:
-		return "Instagram App ID"
+		return "Meta App ID"
 	case KeyIGAppSecret:
-		return "Instagram App Secret"
+		return "Meta App Secret"
+	case KeyIGConfigID:
+		return "配置 ID"
 	case KeyIGVerifyToken:
 		return "Webhook 驗證 Token"
 	case KeyAnthropicKey:
@@ -360,4 +369,4 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, k, 
 	return nil
 }
 
-var ErrNotConfigured = errors.New("未設定 IG App ID／App Secret")
+var ErrNotConfigured = errors.New("未設定 Meta App ID／App Secret／配置 ID")

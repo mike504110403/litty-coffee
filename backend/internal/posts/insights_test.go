@@ -2,12 +2,14 @@ package posts
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
+	"github.com/mike504110403/litty-coffee/backend/internal/testdb"
 )
 
 // seedPost 直接寫一篇指定狀態的貼文（繞過發佈流程）。
@@ -15,9 +17,9 @@ func seedPost(t *testing.T, pool *pgxpool.Pool, kind, status, mediaID string, pu
 	t.Helper()
 	var id int64
 	err := pool.QueryRow(context.Background(), `
-INSERT INTO scheduled_posts (kind, status, ig_media_id, published_at, scheduled_at)
-VALUES ($1, $2, $3, now() - $4::interval, now() - $4::interval) RETURNING id`,
-		kind, status, mediaID, secs(publishedAgo)).Scan(&id)
+INSERT INTO scheduled_posts (kind, status, ig_media_id, published_at, scheduled_at, ig_account_id)
+VALUES ($1, $2, $3, now() - $4::interval, now() - $4::interval, $5) RETURNING id`,
+		kind, status, mediaID, secs(publishedAgo), testAcc).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +28,7 @@ VALUES ($1, $2, $3, now() - $4::interval, now() - $4::interval) RETURNING id`,
 
 func newRefresher(s *Service) (*InsightsRefresher, *ig.FakePublisher) {
 	f := ig.NewFakePublisher()
-	return &InsightsRefresher{Svc: s, IG: f, Token: "t"}, f
+	return &InsightsRefresher{Svc: s, IG: f, Creds: testCreds(s.DB)}, f
 }
 
 func TestInsightsWrittenForPublishedOnly(t *testing.T) {
@@ -156,14 +158,35 @@ func TestInsightsOneFailureDoesNotBlockOthers(t *testing.T) {
 func TestInsightsNoTokenAndNotPublished(t *testing.T) {
 	s, pool := setup(t)
 	ctx := context.Background()
-	seedPost(t, pool, "image", "published", "m1", time.Hour)
+	pub := seedPost(t, pool, "image", "published", "m1", time.Hour)
 	draft := seedPost(t, pool, "image", "draft", "", time.Hour)
 	r, _ := newRefresher(s)
 	if _, err := r.RefreshPost(ctx, draft); err != ErrInsightsUnavailable {
 		t.Fatalf("draft: %v", err)
 	}
-	r.Token = ""
-	if _, err := r.RunOnce(ctx, time.Now()); err != ErrNoToken {
-		t.Fatalf("no token: %v", err)
+	r.Creds = nil
+	if n, err := r.RunOnce(ctx, time.Now()); err != nil || n != 0 {
+		t.Fatalf("no token: n=%d err=%v", n, err)
+	}
+	if _, err := r.RefreshPost(ctx, pub); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("no token refresh: %v", err)
+	}
+}
+
+// 成效用貼文帳號的 token 查。
+func TestInsightsUseAccountToken(t *testing.T) {
+	s, pool := setup(t)
+	ctx := context.Background()
+	acc2 := testdb.ConnectedAccount(t, pool, "acct-2")
+	id := seedPost(t, pool, "image", "published", "m-two", time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_posts SET ig_account_id = $2 WHERE id = $1`, id, acc2); err != nil {
+		t.Fatal(err)
+	}
+	r, f := newRefresher(s)
+	if _, err := r.RefreshPost(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if f.InsightToken["m-two"] != "tok-acct-2" {
+		t.Fatalf("insights token %q", f.InsightToken["m-two"])
 	}
 }

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 )
@@ -19,12 +21,14 @@ func (s *Server) postRoutes(r chi.Router) {
 	r.Get("/posts", s.listPosts)
 	r.Get("/posts/upcoming-count", s.upcomingCount)
 	r.Post("/posts", s.savePost)
+	r.Get("/posts/{id}", s.getPost)
 	r.Put("/posts/{id}", s.savePost)
 	r.Delete("/posts/{id}", s.deletePost)
 	r.Post("/posts/caption", s.suggestCaption)
 	r.Post("/posts/{id}/insights/refresh", s.refreshInsights)
 }
 
+// uploadMedia：表單欄位 account＝這個檔案要給哪個 IG 帳號用（必填、須在可見範圍內）。
 func (s *Server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, media.MaxVideoBytes+(1<<20))
 	f, hdr, err := r.FormFile("file")
@@ -33,7 +37,11 @@ func (s *Server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	a, err := s.Media.Save(r.Context(), hdr.Filename, f)
+	acc, _ := strconv.ParseInt(r.FormValue("account"), 10, 64)
+	if !requireAccount(w, r, acc) {
+		return
+	}
+	a, err := s.Media.Save(r.Context(), acc, hdr.Filename, f)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -53,8 +61,13 @@ func parseTime(v string) *time.Time {
 }
 
 func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
-	list, err := s.Posts.List(r.Context(), posts.ListFilter{From: parseTime(q.Get("from")), To: parseTime(q.Get("to")), Status: q.Get("status")})
+	list, err := s.Posts.List(r.Context(), posts.ListFilter{From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
+		Status: q.Get("status"), Accounts: accounts})
 	if err != nil {
 		log.Printf("posts: %v", err)
 		writeErr(w, http.StatusInternalServerError, "讀取失敗")
@@ -64,12 +77,51 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) upcomingCount(w http.ResponseWriter, r *http.Request) {
-	n, err := s.Posts.CountUpcoming(r.Context())
+	accounts, ok := accountsFilter(w, r)
+	if !ok {
+		return
+	}
+	n, err := s.Posts.CountUpcoming(r.Context(), accounts)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "讀取失敗")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": n})
+}
+
+// scopedPost 讀貼文；不在可見範圍內一律回 ErrNotFound。
+func (s *Server) scopedPost(r *http.Request, id int64) (posts.Post, error) {
+	p, err := s.Posts.Get(r.Context(), id)
+	if err == nil && !canSee(r, p.IGAccountID) {
+		return posts.Post{}, posts.ErrNotFound
+	}
+	return p, err
+}
+
+func (s *Server) getPost(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	p, err := s.scopedPost(r, id)
+	if err != nil {
+		s.postErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) postErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, posts.ErrNotFound):
+		writeErr(w, http.StatusNotFound, posts.ErrNotFound.Error())
+	case errors.Is(err, posts.ErrImmutable):
+		writeErr(w, http.StatusConflict, err.Error())
+	default:
+		log.Printf("posts: %v", err)
+		writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
+	}
 }
 
 func (s *Server) savePost(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +140,18 @@ func (s *Server) savePost(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "bad id")
 			return
 		}
+		old, err := s.scopedPost(r, id)
+		if err != nil {
+			s.postErr(w, err)
+			return
+		}
 		in.Post.ID = id
+		if in.Post.IGAccountID == 0 {
+			in.Post.IGAccountID = old.IGAccountID
+		}
+	}
+	if !requireAccount(w, r, in.Post.IGAccountID) {
+		return
 	}
 	p, err := s.Posts.Save(r.Context(), in.Post, in.Action, time.Now())
 	switch {
@@ -109,6 +172,10 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	if _, err := s.scopedPost(r, id); err != nil {
+		s.postErr(w, err)
+		return
+	}
 	err = s.Posts.Delete(r.Context(), id)
 	switch {
 	case errors.Is(err, posts.ErrNotFound):
@@ -122,25 +189,34 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// suggestCaption 用指定帳號的人設與知識庫寫文案（body.account 必填、須在可見範圍內）。
 func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
-	if s.CaptionAI == nil || !s.CaptionAI.Enabled() {
-		writeErr(w, http.StatusServiceUnavailable, "尚未設定 Claude API Key，無法使用 AI 寫文案")
-		return
-	}
 	var in struct {
-		Brief string `json:"brief"`
-		Kind  string `json:"kind"`
+		Brief   string `json:"brief"`
+		Kind    string `json:"kind"`
+		Account int64  `json:"account"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Brief) == "" {
 		writeErr(w, http.StatusBadRequest, "請描述這篇貼文想說什麼")
 		return
 	}
-	st, err := s.Auto.Store.GetSettings(r.Context())
+	if !requireAccount(w, r, in.Account) {
+		return
+	}
+	if s.CaptionAI == nil || !s.CaptionAI.Enabled() {
+		writeErr(w, http.StatusServiceUnavailable, "尚未設定 Claude API Key，無法使用 AI 寫文案")
+		return
+	}
+	st, err := s.Auto.Store.GetSettings(r.Context(), in.Account)
+	if errors.Is(err, automation.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "找不到這個 IG 帳號")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "讀取設定失敗")
 		return
 	}
-	kb, err := s.Auto.Store.ListKnowledge(r.Context())
+	kb, err := s.Auto.Store.ListKnowledge(r.Context(), in.Account)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "讀取知識庫失敗")
 		return
@@ -159,6 +235,10 @@ func (s *Server) refreshInsights(w http.ResponseWriter, r *http.Request) {
 	id, err := idParam(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := s.scopedPost(r, id); err != nil {
+		s.postErr(w, err)
 		return
 	}
 	if s.Posts.Insights == nil {
