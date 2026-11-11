@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { resilientSSE, type ResilientSSE } from '@/utils/sse'
 import { ref } from 'vue'
 import type { DigestReady, DistillReady, SystemAlert } from '@/api/system'
 
@@ -6,7 +7,7 @@ import type { DigestReady, DistillReady, SystemAlert } from '@/api/system'
 // 與收件匣串流分開，不需收件匣權限；後端依權限與可見帳號過濾。
 export const useSystemStore = defineStore('system', () => {
   const connected = ref(false)
-  let es: EventSource | null = null
+  let sse: ResilientSSE | null = null
 
   type AlertHandler = (a: SystemAlert) => void
   type DigestHandler = (d: DigestReady) => void
@@ -30,31 +31,29 @@ export const useSystemStore = defineStore('system', () => {
   }
 
   function connect() {
-    if (es) return
-    es = new EventSource('/api/system/stream', { withCredentials: true })
-    es.onopen = () => {
-      connected.value = true
-    }
-    es.onerror = () => {
-      connected.value = false
-    }
-    es.addEventListener('system.alert', (e) => {
-      const a = JSON.parse((e as MessageEvent).data) as SystemAlert
-      alertHandlers.forEach((fn) => fn(a))
-    })
-    es.addEventListener('digest.ready', (e) => {
-      const d = JSON.parse((e as MessageEvent).data) as DigestReady
-      digestHandlers.forEach((fn) => fn(d))
-    })
-    es.addEventListener('distill.ready', (e) => {
-      const d = JSON.parse((e as MessageEvent).data) as DistillReady
-      distillHandlers.forEach((fn) => fn(d))
+    if (sse) return
+    sse = resilientSSE('/api/system/stream', {
+      onState: (v) => (connected.value = v),
+      listen: (es) => {
+        es.addEventListener('system.alert', (e) => {
+          const a = JSON.parse((e as MessageEvent).data) as SystemAlert
+          alertHandlers.forEach((fn) => fn(a))
+        })
+        es.addEventListener('digest.ready', (e) => {
+          const d = JSON.parse((e as MessageEvent).data) as DigestReady
+          digestHandlers.forEach((fn) => fn(d))
+        })
+        es.addEventListener('distill.ready', (e) => {
+          const d = JSON.parse((e as MessageEvent).data) as DistillReady
+          distillHandlers.forEach((fn) => fn(d))
+        })
+      },
     })
   }
 
   function disconnect() {
-    es?.close()
-    es = null
+    sse?.close()
+    sse = null
     connected.value = false
   }
 

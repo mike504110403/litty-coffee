@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { resilientSSE, type ResilientSSE } from '@/utils/sse'
 import { computed, ref } from 'vue'
 import { inboxApi, type Conversation, type Message } from '@/api/inbox'
 import type { RiskResult } from '@/api/flags'
@@ -15,7 +16,7 @@ export const useInboxStore = defineStore('inbox', () => {
   const connected = ref(false)
   const accountFilter = ref<number | null>(null) // null＝全部帳號
   const query = ref('')
-  let es: EventSource | null = null
+  let sse: ResilientSSE | null = null
 
   const totalUnread = computed(() => conversations.value.reduce((n, c) => n + c.unreadCount, 0))
   const active = computed(() => conversations.value.find((c) => c.id === activeId.value) ?? null)
@@ -116,44 +117,42 @@ export const useInboxStore = defineStore('inbox', () => {
   }
 
   function connect() {
-    if (es) return
-    es = new EventSource('/api/inbox/stream', { withCredentials: true })
-    es.onopen = () => {
+    if (sse) return
+    sse = resilientSSE('/api/inbox/stream', {
+      onState: (v) => (connected.value = v),
       // 重連後補抓斷線期間漏掉的
-      if (!connected.value) {
+      onReopen: () => {
         void fetchConversations()
         if (activeId.value != null) void loadMessages(activeId.value)
-      }
-      connected.value = true
-    }
-    es.onerror = () => {
-      connected.value = false
-    }
-    es.addEventListener('message.created', (e) => {
-      const m = JSON.parse((e as MessageEvent).data) as Message
-      appendMessage(m)
-      if (m.direction === 'in' && m.conversationId === activeId.value && document.visibilityState === 'visible') {
-        void inboxApi.markRead(m.conversationId)
-      }
-    })
-    es.addEventListener('message.updated', (e) => {
-      replaceMessage(JSON.parse((e as MessageEvent).data) as Message)
-    })
-    es.addEventListener('handoff.requested', (e) => {
-      const ev = JSON.parse((e as MessageEvent).data) as { conversation: Conversation; reason: string }
-      upsertConversation(ev.conversation)
-      handoffHandlers.forEach((fn) => fn(ev))
-    })
-    es.addEventListener('conversation.updated', (e) => {
-      const c = JSON.parse((e as MessageEvent).data) as Conversation
-      if (c.id === activeId.value && document.visibilityState === 'visible') c.unreadCount = 0
-      upsertConversation(c)
+      },
+      listen: (es) => {
+        es.addEventListener('message.created', (e) => {
+          const m = JSON.parse((e as MessageEvent).data) as Message
+          appendMessage(m)
+          if (m.direction === 'in' && m.conversationId === activeId.value && document.visibilityState === 'visible') {
+            void inboxApi.markRead(m.conversationId)
+          }
+        })
+        es.addEventListener('message.updated', (e) => {
+          replaceMessage(JSON.parse((e as MessageEvent).data) as Message)
+        })
+        es.addEventListener('handoff.requested', (e) => {
+          const ev = JSON.parse((e as MessageEvent).data) as { conversation: Conversation; reason: string }
+          upsertConversation(ev.conversation)
+          handoffHandlers.forEach((fn) => fn(ev))
+        })
+        es.addEventListener('conversation.updated', (e) => {
+          const c = JSON.parse((e as MessageEvent).data) as Conversation
+          if (c.id === activeId.value && document.visibilityState === 'visible') c.unreadCount = 0
+          upsertConversation(c)
+        })
+      },
     })
   }
 
   function disconnect() {
-    es?.close()
-    es = null
+    sse?.close()
+    sse = null
     connected.value = false
   }
 
