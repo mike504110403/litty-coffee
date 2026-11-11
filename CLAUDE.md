@@ -12,7 +12,9 @@ stage: mvp
 - IG：官方 Instagram API with Instagram Login（商家帳號）；開發期用模擬器假造 webhook
 - 前端：Vue 3＋TS＋Vite＋Element Plus＋Pinia＋vue-router；`frontend/`；用 npm（pnpm 在 Node 20 上會壞）
 - i18n：只做繁中，不掛 vue-i18n（單一店家）
-- 認證：單一或少量管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立
+- 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner）
+- 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, ig_accounts, credentials, admins）；店長全權。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
+- 真人回覆記錄 `messages.sent_by_admin_id`，收件匣顯示回覆者名字
 - 處理流程：webhook 先落 `webhook_events`，再由背景處理器依序走規則 → AI → 送出
 
 ## 地端起法
@@ -69,13 +71,20 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上模擬器帳號 `dev-litty-coffee`
 - 改密碼：`POST /api/auth/password`，既有 session 不撤銷
 
+## 憑證（後台可設定）
+
+- `app_settings` 表；IG App ID／Secret／驗證碼、Claude key／模型／強度可在設定頁「憑證」填寫，DB 值優先於 `.env`，存檔即生效（`appsettings.Store` 快照＋`LiveOAuth`／`automation.LiveAI` 原子替換）
+- 機密欄位 AES-256-GCM 加密（`internal/secrets`），鑰匙＝env `SECRET_KEY`；未設時由 `JWT_SECRET` 推導（MVP 兜底，畢業前要設獨立 `SECRET_KEY`，換鑰匙＝已存密文讀不回）。API 只回尾 4 碼
+- 「測試連線」用 Anthropic Models List（不計費）；IG App 沒有可靠的便宜檢查，未做
+
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
 - AI 真實呼叫尚未實測（目前無 API key）；沙盒可直接驗
 - IG 真實發佈（Content Publishing API）尚未實測：端點與參數依官方文件寫成，串上真帳號時需驗；尚未查 `content_publishing_limit`（24h 上限）
 - 成效 API 未接真帳號實測；文件寫輪播（album）可能無成效數據，目前照一般貼文請求，失敗會記在 `insights_error`
 - 附件下載失敗不重試（IG 網址過期後也抓不到）
-- IG OAuth 真實流程尚未實測（需 Meta App＋HTTPS 網址）；token 以明文存 DB，畢業總審時評估加密
+- IG OAuth 真實流程尚未實測（需 Meta App＋HTTPS 網址）；IG 帳號的 access token 仍以明文存 DB（憑證已加密），畢業總審時評估一併加密
+- 管理員重設密碼不會撤銷對方既有 session
 
 ## IG API 限制（設計時以此為準）
 

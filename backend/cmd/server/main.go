@@ -14,6 +14,7 @@ import (
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
+	"github.com/mike504110403/litty-coffee/backend/internal/appsettings"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
@@ -25,6 +26,7 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
+	"github.com/mike504110403/litty-coffee/backend/internal/secrets"
 )
 
 func main() {
@@ -49,8 +51,25 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// 後台可改的憑證：DB（加密）優先於 .env，存檔即生效；啟動時先讀一次
+	box, keyFallback, err := secrets.NewBox(cfg.SecretKey, cfg.JWTSecret)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if keyFallback {
+		log.Print("警告：未設 SECRET_KEY，後台憑證加密金鑰改由 JWT_SECRET 衍生（MVP 兜底）；換 JWT_SECRET 會讓已存憑證解不開，正式環境請設獨立的 SECRET_KEY")
+	}
+	creds := appsettings.New(pool, box, appsettings.Values{
+		IGAppID: cfg.IGAppID, IGAppSecret: cfg.IGAppSecret, IGVerifyToken: cfg.IGVerifyToken,
+		AnthropicKey: cfg.AnthropicAPIKey, AIModel: cfg.AIModel, AIEffort: cfg.AIEffort,
+	})
+	if err := creds.Load(ctx); err != nil {
+		log.Fatal(err)
+	}
+	eff := creds.Values()
+
 	hub := realtime.NewHub()
-	api := &httpapi.Server{DB: pool, Auth: authSvc, Hub: hub, IGAppSecret: cfg.IGAppSecret, IGVerifyToken: cfg.IGVerifyToken}
+	api := &httpapi.Server{DB: pool, Auth: authSvc, Hub: hub, Creds: creds}
 	var messenger ig.Messenger = ig.NewClient(cfg.IGAPIBase)
 	if cfg.DevSimulator {
 		api.Fake = ig.NewFake()
@@ -61,16 +80,26 @@ func main() {
 	api.Inbox.DefaultToken = cfg.IGAccessToken
 	api.Inbox.MediaDir = cfg.MediaDir
 	engine := &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: api.Inbox, Ctx: ctx}
-	if cfg.AnthropicAPIKey != "" {
-		ai := automation.NewAI(cfg.AnthropicAPIKey, cfg.AIModel, cfg.AIEffort)
-		engine.AI = ai
-		api.CaptionAI = ai
-		log.Printf("AI 自動回覆：%s（effort=%s）", cfg.AIModel, cfg.AIEffort)
+	// AI 永遠掛同一個 LiveAI；沒 key 時 Enabled()＝false（只跑規則、文案回 503）。設定頁存檔時由 OnChange 換 key／模型
+	liveAI := &automation.LiveAI{}
+	engine.AI = liveAI
+	api.CaptionAI = liveAI
+	liveAI.Set(eff.AnthropicKey, eff.AIModel, eff.AIEffort)
+	creds.OnChange(func(v appsettings.Values) {
+		liveAI.Set(v.AnthropicKey, v.AIModel, v.AIEffort)
+		if v.AnthropicKey != "" {
+			log.Printf("AI 設定已更新：%s（effort=%s）", v.AIModel, v.AIEffort)
+		} else {
+			log.Print("AI 設定已更新：未設 Claude API Key，只跑關鍵字規則")
+		}
+	})
+	if liveAI.Enabled() {
+		log.Printf("AI 自動回覆：%s（effort=%s）", eff.AIModel, eff.AIEffort)
 	} else {
-		log.Print("未設 ANTHROPIC_API_KEY：只跑關鍵字規則")
+		log.Print("未設 Claude API Key（.env 與後台皆無）：只跑關鍵字規則")
 	}
 	api.Auto = engine
-	api.AIModel = cfg.AIModel
+	api.AIModel = eff.AIModel
 	api.Inbox.OnInbound = engine.OnInbound
 
 	loc, err := time.LoadLocation(cfg.Timezone)
@@ -83,15 +112,16 @@ func main() {
 	api.Media = &media.Store{DB: pool, Dir: cfg.MediaDir, PublicBase: cfg.PublicBaseURL}
 	api.Posts = posts.NewService(pool, api.Media)
 	// IG 帳號連結：設定頁 OAuth；模擬模式下授權頁直接導回，連上模擬器的假商家帳號
-	api.Info = httpapi.SystemInfo{WebOrigin: cfg.WebOrigin, PublicBaseURL: cfg.PublicBaseURL, IGAppIDSet: cfg.IGAppID != "",
-		IGSecretSet: cfg.IGAppSecret != "", AIKeySet: cfg.AnthropicAPIKey != "", Timezone: cfg.Timezone}
+	api.Info = httpapi.SystemInfo{WebOrigin: cfg.WebOrigin, PublicBaseURL: cfg.PublicBaseURL, Timezone: cfg.Timezone}
 	api.Accounts = &account.Service{DB: pool, FallbackToken: cfg.IGAccessToken}
 	redirectURI := cfg.WebOrigin + "/api/ig/oauth/callback"
 	switch {
 	case cfg.DevSimulator:
 		api.Accounts.OAuth = ig.NewFakeOAuth(redirectURI, httpapi.DevAccountID)
-	case cfg.IGAppID != "" && cfg.IGAppSecret != "":
-		api.Accounts.OAuth = ig.NewOAuthClient(cfg.IGAppID, cfg.IGAppSecret, redirectURI, cfg.IGAPIBase)
+	default:
+		// 隨設定頁存檔即時換 App ID／Secret；沒憑證時 account.Service 視為未設定
+		api.Accounts.OAuth = &appsettings.LiveOAuth{Store: creds, RedirectURI: redirectURI, APIBase: cfg.IGAPIBase,
+			SettingsErrorURL: cfg.WebOrigin + "/settings"}
 	}
 	go api.Accounts.RunRefresher(ctx)
 

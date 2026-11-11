@@ -13,6 +13,15 @@ import (
 // Send 從後台（human）或自動回覆（bot / ai）送一則文字訊息給顧客。
 // 真人送出會把對話切成 handler=human（bot 暫停），業界慣例。
 func (s *Service) Send(ctx context.Context, convID int64, text, senderType string) (Message, error) {
+	return s.send(ctx, convID, text, senderType, 0)
+}
+
+// SendAsAdmin 是後台管理員的真人回覆，記下送出者（messages.sent_by_admin_id）。
+func (s *Service) SendAsAdmin(ctx context.Context, convID int64, text string, adminID int64) (Message, error) {
+	return s.send(ctx, convID, text, "human", adminID)
+}
+
+func (s *Service) send(ctx context.Context, convID int64, text, senderType string, adminID int64) (Message, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Message{}, ErrEmptyText
@@ -45,13 +54,23 @@ WHERE c.id = $1`, convID).Scan(&accountIGID, &token, &igsid, &lastInbound)
 
 	now := time.Now()
 	m := Message{ConversationID: convID, Direction: "out", SenderType: senderType, Kind: "text", Text: text}
-	// echo 可能比這裡先到並以 human 落庫；以我方的 sender_type 為準覆寫
+	var sentBy *int64
+	if adminID > 0 {
+		sentBy = &adminID
+	}
+	var sentByName *string
+	// echo 可能比這裡先到並以 human 落庫；以我方的 sender_type／送出者為準覆寫
 	if err := s.DB.QueryRow(ctx, `
-INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, kind, text, created_at)
-VALUES ($1, $2, 'out', $3, 'text', $4, $5)
-ON CONFLICT (ig_mid) DO UPDATE SET sender_type = EXCLUDED.sender_type
-RETURNING id, created_at`, convID, mid, senderType, text, now).Scan(&m.ID, &m.CreatedAt); err != nil {
+INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, kind, text, created_at, sent_by_admin_id)
+VALUES ($1, $2, 'out', $3, 'text', $4, $5, $6)
+ON CONFLICT (ig_mid) DO UPDATE SET sender_type = EXCLUDED.sender_type, sent_by_admin_id = EXCLUDED.sent_by_admin_id
+RETURNING id, created_at,
+  (SELECT COALESCE(NULLIF(display_name, ''), username) FROM admin_users WHERE id = $6)`,
+		convID, mid, senderType, text, now, sentBy).Scan(&m.ID, &m.CreatedAt, &sentByName); err != nil {
 		return Message{}, err
+	}
+	if sentBy != nil && sentByName != nil {
+		m.SentBy = &Sender{ID: adminID, DisplayName: *sentByName}
 	}
 
 	handlerSQL := ""

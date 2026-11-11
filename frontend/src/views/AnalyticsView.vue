@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { crmApi, type Summary } from '@/api/crm'
+import { useAuthStore } from '@/stores/auth'
 import { interactions, kindLabels, postsApi, type Post } from '@/api/posts'
 import { intentLabels } from '@/api/automation'
 import ColumnChart from '@/components/charts/ColumnChart.vue'
@@ -37,7 +38,9 @@ watch(days, load)
 // ---- 貼文成效：區間內已發佈、且已取得數據的貼文，依互動數排序 ----
 const posts = ref<Post[]>([])
 const postsLoading = ref(false)
+const auth = useAuthStore()
 async function loadPosts() {
+  if (!auth.can('schedule')) return // 貼文資料需要排程權限
   postsLoading.value = true
   try {
     const from = new Date(Date.now() - days.value * 86400_000)

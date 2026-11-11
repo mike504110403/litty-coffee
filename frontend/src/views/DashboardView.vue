@@ -17,25 +17,36 @@ const greeting = computed(() => {
 
 const today = ref<Summary | null>(null)
 const upcoming = ref<number | null>(null)
+// 各區塊依權限顯示；沒權限的 API 不打（後端會 403）
+const canAnalytics = computed(() => auth.can('analytics'))
+const canSchedule = computed(() => auth.can('schedule'))
 onMounted(async () => {
-  ;[today.value, upcoming.value] = await Promise.all([crmApi.summary(1), postsApi.upcomingCount()])
+  ;[today.value, upcoming.value] = await Promise.all([
+    canAnalytics.value ? crmApi.summary(1) : null,
+    canSchedule.value ? postsApi.upcomingCount() : null,
+  ])
 })
 
 const stats = computed(() => {
   const c = today.value?.current
+  const a = canAnalytics.value
+  const s = canSchedule.value
   return [
-    { label: '今日顧客訊息', value: c ? formatCount(c.totals.inbound) : '—', icon: ChatDotRound, tone: 'caramel' },
-    { label: '今日自動回覆占比', value: formatPercent(c?.autoShare), icon: MagicStick, tone: 'roast' },
-    { label: '今日回應時間中位數', value: formatDuration(c?.response.medianSecs), icon: Timer, tone: 'sage' },
-    { label: '待發排程', value: upcoming.value == null ? '—' : String(upcoming.value), icon: Calendar, tone: 'rose' },
-  ]
+    { show: a, label: '今日顧客訊息', value: c ? formatCount(c.totals.inbound) : '—', icon: ChatDotRound, tone: 'caramel' },
+    { show: a, label: '今日自動回覆占比', value: formatPercent(c?.autoShare), icon: MagicStick, tone: 'roast' },
+    { show: a, label: '今日回應時間中位數', value: formatDuration(c?.response.medianSecs), icon: Timer, tone: 'sage' },
+    { show: s, label: '待發排程', value: upcoming.value == null ? '—' : String(upcoming.value), icon: Calendar, tone: 'rose' },
+  ].filter((x) => x.show)
 })
 
-const steps = [
-  { title: '連結 IG 商家帳號', desc: '在「設定」授權 Instagram，開始接收私訊' },
-  { title: '建立店家知識庫', desc: '菜單、營業時間、地址，讓 AI 回答更準' },
-  { title: '設定關鍵字回覆', desc: '例如「菜單」「訂位」自動回應' },
-]
+// 只列出這位管理員有權限做的設定步驟
+const steps = computed(() =>
+  [
+    { perm: 'ig_accounts', title: '連結 IG 商家帳號', desc: '在「設定」授權 Instagram，開始接收私訊' },
+    { perm: 'automation', title: '建立店家知識庫', desc: '菜單、營業時間、地址，讓 AI 回答更準' },
+    { perm: 'automation', title: '設定關鍵字回覆', desc: '例如「菜單」「訂位」自動回應' },
+  ].filter((st) => auth.can(st.perm as Parameters<typeof auth.can>[0])),
+)
 </script>
 
 <template>
@@ -43,7 +54,7 @@ const steps = [
     <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
     <p class="lc-page-sub">今天店裡的 IG 狀況一覽</p>
 
-    <div class="stats">
+    <div v-if="stats.length" class="stats">
       <div v-for="s in stats" :key="s.label" class="stat lc-card">
         <div class="stat-icon" :class="s.tone">
           <el-icon :size="20"><component :is="s.icon" /></el-icon>
@@ -53,7 +64,7 @@ const steps = [
       </div>
     </div>
 
-    <div class="onboard lc-card">
+    <div v-if="steps.length" class="onboard lc-card">
       <h3>開始設定</h3>
       <ol>
         <li v-for="(st, i) in steps" :key="st.title">

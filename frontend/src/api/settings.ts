@@ -18,16 +18,12 @@ export interface SettingsInfo {
   account: IgAccount | null
   integration: {
     oauthReady: boolean
-    appIdSet: boolean
-    appSecretSet: boolean
-    verifyToken: string
     webhookUrl: string
     redirectUri: string
     publicBaseUrl: string
     envTokenSet: boolean
     simulator: boolean
   }
-  ai: { enabled: boolean; model: string }
   timezone: string
 }
 

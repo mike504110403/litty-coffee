@@ -18,6 +18,8 @@ import (
 var (
 	ErrNotConnected = errors.New("尚未連結 IG 帳號")
 	ErrTooSoon      = errors.New("授權取得未滿 24 小時，IG 不允許續期")
+
+	ErrOAuthNotConfigured = errors.New("尚未設定 IG App ID／App Secret（到「設定」填寫，或設 IG_APP_ID／IG_APP_SECRET）")
 )
 
 // 續期門檻：剩不到 RefreshWithin 就續；IG 規定 token 要滿 24 小時才能續。
@@ -43,9 +45,20 @@ type Account struct {
 
 type Service struct {
 	DB            *pgxpool.Pool
-	OAuth         ig.OAuth // nil＝未設定 IG_APP_ID／IG_APP_SECRET
+	OAuth         ig.OAuth // nil＝未設定；正式環境是 appsettings.LiveOAuth（隨設定頁存檔即時換憑證），模擬模式是 ig.FakeOAuth
 	FallbackToken string   // env IG_ACCESS_TOKEN：沒連結帳號時的舊做法兜底
 	Now           func() time.Time
+}
+
+// oauthReady 回 OAuth 是否可用：nil 或實作了 Configured() 且回 false（憑證尚未設定）都算未設定。
+func (s *Service) oauthReady() bool {
+	if s.OAuth == nil {
+		return false
+	}
+	if c, ok := s.OAuth.(interface{ Configured() bool }); ok {
+		return c.Configured()
+	}
+	return true
 }
 
 func (s *Service) now() time.Time {
@@ -94,8 +107,8 @@ func (s *Service) Token(ctx context.Context) (string, error) {
 
 // Connect 用 OAuth callback 的 code 完成連結。
 func (s *Service) Connect(ctx context.Context, code string) (Account, error) {
-	if s.OAuth == nil {
-		return Account{}, errors.New("未設定 IG_APP_ID／IG_APP_SECRET")
+	if !s.oauthReady() {
+		return Account{}, ErrOAuthNotConfigured
 	}
 	short, err := s.OAuth.Exchange(ctx, code)
 	if err != nil {
@@ -164,8 +177,8 @@ func (s *Service) Refresh(ctx context.Context) (Account, error) {
 }
 
 func (s *Service) refresh(ctx context.Context, a Account) error {
-	if s.OAuth == nil {
-		return errors.New("未設定 IG_APP_ID／IG_APP_SECRET")
+	if !s.oauthReady() {
+		return ErrOAuthNotConfigured
 	}
 	issued := a.TokenRefreshedAt
 	if issued == nil {
@@ -192,8 +205,8 @@ func (s *Service) Resubscribe(ctx context.Context) (Account, error) {
 	if err != nil {
 		return a, err
 	}
-	if s.OAuth == nil {
-		return a, errors.New("未設定 IG_APP_ID／IG_APP_SECRET")
+	if !s.oauthReady() {
+		return a, ErrOAuthNotConfigured
 	}
 	if err := s.OAuth.Subscribe(ctx, a.token); err != nil {
 		return a, fmt.Errorf("訂閱私訊通知失敗：%w", err)

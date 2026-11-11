@@ -44,9 +44,13 @@ func (s *Server) autoErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) autoStatus(w http.ResponseWriter, r *http.Request) {
+	model := s.AIModel
+	if s.CaptionAI != nil && s.CaptionAI.Enabled() {
+		model = s.CaptionAI.Model()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"aiConfigured": s.Auto.AI != nil,
-		"model":        s.AIModel,
+		"aiConfigured": s.Auto.AIEnabled(),
+		"model":        model,
 	})
 }
 

@@ -123,8 +123,8 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
-	if s.CaptionAI == nil {
-		writeErr(w, http.StatusServiceUnavailable, "尚未設定 ANTHROPIC_API_KEY，無法使用 AI 寫文案")
+	if s.CaptionAI == nil || !s.CaptionAI.Enabled() {
+		writeErr(w, http.StatusServiceUnavailable, "尚未設定 Claude API Key，無法使用 AI 寫文案")
 		return
 	}
 	var in struct {

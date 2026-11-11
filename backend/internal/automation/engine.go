@@ -28,10 +28,21 @@ type Outcome struct {
 type Engine struct {
 	Store *Store
 	Inbox *inbox.Service
-	AI    Decider // nil＝沒設 ANTHROPIC_API_KEY
+	AI    Decider // nil 或 LiveAI 未啟用＝沒有 Claude API Key，只跑規則
 	Ctx   context.Context
 
 	locks sync.Map // convID -> *sync.Mutex
+}
+
+// AIEnabled 回 AI 是否可用：沒掛 Decider，或掛的是尚未設 key 的 LiveAI 都算未啟用。
+func (e *Engine) AIEnabled() bool {
+	if e.AI == nil {
+		return false
+	}
+	if l, ok := e.AI.(interface{ Enabled() bool }); ok {
+		return l.Enabled()
+	}
+	return true
 }
 
 const historyTurns = 20
@@ -136,8 +147,8 @@ func (e *Engine) Evaluate(ctx context.Context, st Settings, history []inbox.Mess
 	if !st.AIEnabled {
 		return Outcome{Kind: "none", Detail: "AI 回覆已關閉"}, nil
 	}
-	if e.AI == nil {
-		return Outcome{Kind: "none", Detail: "尚未設定 ANTHROPIC_API_KEY"}, nil
+	if !e.AIEnabled() {
+		return Outcome{Kind: "none", Detail: "尚未設定 Claude API Key"}, nil
 	}
 
 	kb, err := e.Store.ListKnowledge(ctx)

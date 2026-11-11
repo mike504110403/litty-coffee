@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,7 +16,10 @@ import (
 
 const CookieName = "litty_session"
 
-var ErrBadCredentials = errors.New("bad credentials")
+var (
+	ErrBadCredentials = errors.New("bad credentials")
+	ErrDisabled       = errors.New("此帳號已停用")
+)
 
 type Service struct {
 	DB     *pgxpool.Pool
@@ -24,12 +28,37 @@ type Service struct {
 }
 
 type User struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
+	ID          int64      `json:"id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"displayName"`
+	IsOwner     bool       `json:"isOwner"`
+	Permissions []string   `json:"permissions"` // 有效權限：店長回完整清單
+	Disabled    bool       `json:"disabled"`
+	LastLoginAt *time.Time `json:"lastLoginAt"`
+	CreatedAt   time.Time  `json:"createdAt"`
 }
 
-// EnsureAdmin creates the initial admin when the table is empty.
+const userCols = `id, username, display_name, is_owner, permissions, disabled_at, last_login_at, created_at`
+
+func scanUser(row pgx.Row, extra ...any) (User, error) {
+	var u User
+	var disabled *time.Time
+	err := row.Scan(append([]any{&u.ID, &u.Username, &u.DisplayName, &u.IsOwner, &u.Permissions, &disabled,
+		&u.LastLoginAt, &u.CreatedAt}, extra...)...)
+	u.Disabled = disabled != nil
+	if u.IsOwner {
+		u.Permissions = append([]string{}, AllPerms...)
+	} else {
+		u.Permissions = normalizePerms(u.Permissions)
+	}
+	return u, err
+}
+
+func (s *Service) getUser(ctx context.Context, id int64) (User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `SELECT `+userCols+` FROM admin_users WHERE id = $1`, id))
+}
+
+// EnsureAdmin creates the initial admin (an owner) when the table is empty.
 func (s *Service) EnsureAdmin(ctx context.Context, username, password string) error {
 	var n int
 	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM admin_users`).Scan(&n); err != nil {
@@ -46,25 +75,31 @@ func (s *Service) EnsureAdmin(ctx context.Context, username, password string) er
 		return err
 	}
 	_, err = s.DB.Exec(ctx,
-		`INSERT INTO admin_users (username, password_hash, display_name) VALUES ($1, $2, $1)`,
+		`INSERT INTO admin_users (username, password_hash, display_name, is_owner) VALUES ($1, $2, $1, true)`,
 		username, string(hash))
 	return err
 }
 
+// Login 驗帳密；停用的帳號拒絕登入。成功時更新 last_login_at。
 func (s *Service) Login(ctx context.Context, username, password string) (User, string, error) {
-	var u User
 	var hash string
-	err := s.DB.QueryRow(ctx,
-		`SELECT id, username, display_name, password_hash FROM admin_users WHERE username = $1`,
-		username).Scan(&u.ID, &u.Username, &u.DisplayName, &hash)
+	u, err := scanUser(s.DB.QueryRow(ctx,
+		`SELECT `+userCols+`, password_hash FROM admin_users WHERE username = $1`, username), &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return u, "", ErrBadCredentials
+		return User{}, "", ErrBadCredentials
 	}
 	if err != nil {
-		return u, "", err
+		return User{}, "", err
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return u, "", ErrBadCredentials
+		return User{}, "", ErrBadCredentials
+	}
+	if u.Disabled {
+		return User{}, "", ErrDisabled
+	}
+	if err := s.DB.QueryRow(ctx, `UPDATE admin_users SET last_login_at = now() WHERE id = $1 RETURNING last_login_at`,
+		u.ID).Scan(&u.LastLoginAt); err != nil {
+		return User{}, "", err
 	}
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 		Subject:   strconv.FormatInt(u.ID, 10),
@@ -82,32 +117,40 @@ func (s *Service) SetCookie(w http.ResponseWriter, token string, maxAge int) {
 
 type ctxKey struct{}
 
-func UserID(ctx context.Context) int64 { v, _ := ctx.Value(ctxKey{}).(int64); return v }
-
+// Middleware 驗 JWT 後每次都從 DB 載入使用者：帳號停用或不存在即 401 並清 cookie，
+// 所以停用當下既有 session 就失效。使用者（含權限）放進 context 供 RequirePerm 用。
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(CookieName)
 		if err != nil {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			writeAuthErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		claims := &jwt.RegisteredClaims{}
 		_, err = jwt.ParseWithClaims(c.Value, claims, func(*jwt.Token) (any, error) { return s.Secret, nil },
 			jwt.WithValidMethods([]string{"HS256"}))
 		if err != nil {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			writeAuthErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		id, _ := strconv.ParseInt(claims.Subject, 10, 64)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, id)))
+		u, err := s.getUser(r.Context(), id)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("auth: load user %d: %v", id, err)
+			writeAuthErr(w, http.StatusInternalServerError, "伺服器錯誤")
+			return
+		}
+		if err != nil || u.Disabled {
+			s.SetCookie(w, "", -1)
+			writeAuthErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, u)))
 	})
 }
 
 func (s *Service) Me(ctx context.Context, id int64) (User, error) {
-	var u User
-	err := s.DB.QueryRow(ctx, `SELECT id, username, display_name FROM admin_users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Username, &u.DisplayName)
-	return u, err
+	return s.getUser(ctx, id)
 }
 
 var ErrWeakPassword = errors.New("新密碼至少 8 個字元")

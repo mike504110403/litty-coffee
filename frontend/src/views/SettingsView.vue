@@ -5,6 +5,9 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { CopyDocument } from '@element-plus/icons-vue'
 import { settingsApi, type IgAccount, type SettingsInfo } from '@/api/settings'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
+import { useAuthStore } from '@/stores/auth'
+import AdminUsersPanel from '@/views/settings/AdminUsersPanel.vue'
+import CredentialsPanel from '@/views/settings/CredentialsPanel.vue'
 
 const theme = useThemeStore()
 const themeOptions: { label: string; value: ThemeMode }[] = [
@@ -15,10 +18,28 @@ const themeOptions: { label: string; value: ThemeMode }[] = [
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+// IG 帳號與串接資訊需要 ig_accounts；外觀與自己的密碼所有人都能用
+const canIg = computed(() => auth.can('ig_accounts'))
+const subtitle = computed(() =>
+  [
+    canIg.value && 'IG 帳號連結',
+    auth.can('credentials') && '憑證',
+    auth.can('admins') && '管理員',
+    '外觀與密碼',
+  ]
+    .filter(Boolean)
+    .join('、'),
+)
 
 const info = ref<SettingsInfo | null>(null)
 const busy = ref<'' | 'refresh' | 'subscribe' | 'disconnect'>('')
 const avatarFailed = ref(false)
+
+// 憑證存檔後 IG 卡片的「能否連結」要跟著更新
+function onCredsSaved() {
+  if (canIg.value) void load()
+}
 
 async function load() {
   info.value = await settingsApi.get()
@@ -33,7 +54,7 @@ onMounted(async () => {
     if (ok) ElMessage.success('IG 帳號已連結')
     else ElMessage({ type: 'error', message: err, duration: 8000, showClose: true })
   }
-  await load()
+  if (canIg.value) await load()
 })
 
 const account = computed(() => info.value?.account ?? null)
@@ -141,10 +162,10 @@ async function savePassword() {
 <template>
   <div class="settings">
     <h1 class="lc-page-title">設定</h1>
-    <p class="lc-page-sub">IG 帳號連結、串接資訊與管理員密碼</p>
+    <p class="lc-page-sub">{{ subtitle }}</p>
 
     <!-- IG 帳號 -->
-    <section v-loading="!info" class="lc-card block">
+    <section v-if="canIg" v-loading="!info" class="lc-card block">
       <h2>IG 帳號</h2>
       <template v-if="info">
         <div v-if="account" class="account">
@@ -261,7 +282,7 @@ async function savePassword() {
     </section>
 
     <!-- 串接資訊 -->
-    <section v-if="integ && info" class="lc-card block">
+    <section v-if="canIg && integ && info" class="lc-card block">
       <h2>串接資訊</h2>
       <p class="hint">設定 Meta 開發者後台時要填的值。</p>
       <el-alert
@@ -281,16 +302,6 @@ async function savePassword() {
           </dd>
         </div>
         <div>
-          <dt>Webhook 驗證碼</dt>
-          <dd>
-            <template v-if="integ.verifyToken">
-              <code>{{ integ.verifyToken }}</code>
-              <el-button link :icon="CopyDocument" aria-label="複製驗證碼" @click="copy(integ.verifyToken)" />
-            </template>
-            <span v-else class="missing">未設定（IG_VERIFY_TOKEN）</span>
-          </dd>
-        </div>
-        <div>
           <dt>OAuth 重新導向網址</dt>
           <dd>
             <code>{{ integ.redirectUri }}</code>
@@ -298,28 +309,26 @@ async function savePassword() {
           </dd>
         </div>
         <div>
-          <dt>App ID／Secret</dt>
-          <dd>
-            <el-tag size="small" :type="integ.appIdSet ? 'success' : 'info'" round>App ID {{ integ.appIdSet ? '已設定' : '未設定' }}</el-tag>
-            <el-tag size="small" :type="integ.appSecretSet ? 'success' : 'info'" round>
-              Secret {{ integ.appSecretSet ? '已設定' : '未設定' }}
-            </el-tag>
-          </dd>
-        </div>
-        <div>
-          <dt>AI 回覆</dt>
-          <dd>
-            <el-tag size="small" :type="info.ai.enabled ? 'success' : 'info'" round>
-              {{ info.ai.enabled ? '已啟用' : '未設定 API key' }}
-            </el-tag>
-            <span v-if="info.ai.enabled" class="muted">{{ info.ai.model }}</span>
-          </dd>
+          <dt>Webhook 驗證碼</dt>
+          <dd class="muted">在下方「憑證」的 Meta App 卡片設定，Meta 後台填同一個值</dd>
         </div>
         <div>
           <dt>店家時區</dt>
           <dd>{{ info.timezone }}</dd>
         </div>
       </dl>
+    </section>
+
+    <!-- 憑證 -->
+    <section v-if="auth.can('credentials')" class="lc-card block">
+      <h2>憑證</h2>
+      <CredentialsPanel @saved="onCredsSaved" />
+    </section>
+
+    <!-- 管理員 -->
+    <section v-if="auth.can('admins')" class="lc-card block">
+      <h2>管理員</h2>
+      <AdminUsersPanel />
     </section>
 
     <!-- 外觀 -->

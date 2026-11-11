@@ -36,6 +36,7 @@ export interface Message {
   mediaUrl: string // 已存檔時是 /api/inbox/media/…；否則是 IG 原始網址（可能已過期）
   reaction: string // 顧客按的表情
   deleted: boolean // 顧客已收回
+  sentBy: { id: number; displayName: string } | null // 後台真人回覆的管理員；自動回覆、從 IG app 回的為 null
   createdAt: string
 }
 

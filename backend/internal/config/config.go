@@ -12,6 +12,7 @@ type Config struct {
 	AdminUser     string
 	AdminPassword string
 	WebOrigin     string
+	SecretKey     string // 加密 DB 內 secret 用的金鑰；空＝由 JWT_SECRET 衍生（MVP 兜底，main 會記警告）
 
 	// Instagram
 	IGAppID       string // Instagram 登入的 App ID（設定頁 OAuth 連結用）
@@ -40,6 +41,7 @@ func Load() (Config, error) {
 		AdminUser:       env("ADMIN_USER", "admin"),
 		AdminPassword:   os.Getenv("ADMIN_PASSWORD"),
 		WebOrigin:       env("WEB_ORIGIN", "http://localhost:5190"),
+		SecretKey:       os.Getenv("SECRET_KEY"),
 		IGAppID:         os.Getenv("IG_APP_ID"),
 		IGAppSecret:     os.Getenv("IG_APP_SECRET"),
 		IGVerifyToken:   os.Getenv("IG_VERIFY_TOKEN"),

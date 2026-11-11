@@ -12,6 +12,7 @@ const auth = useAuthStore()
 const inbox = useInboxStore()
 
 onMounted(() => {
+  if (!auth.can('inbox')) return // 沒收件匣權限就不連即時推送（後端會 403）
   inbox.connect()
   if (!inbox.conversations.length) void inbox.fetchConversations()
 })
@@ -19,7 +20,8 @@ onBeforeUnmount(() => inbox.disconnect())
 
 const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 
-const mobileItems = computed(() => navItems.filter((n) => n.mobile))
+const visibleItems = computed(() => navItems.filter((n) => auth.can(n.perm)))
+const mobileItems = computed(() => visibleItems.value.filter((n) => n.mobile))
 const title = computed(() => (route.meta.title as string | undefined) ?? '')
 const initial = computed(() => (auth.user?.displayName || auth.user?.username || '?').slice(0, 1).toUpperCase())
 
@@ -43,7 +45,7 @@ async function onLogout() {
       </div>
       <nav class="side-nav">
         <RouterLink
-          v-for="n in navItems"
+          v-for="n in visibleItems"
           :key="n.name"
           :to="{ name: n.name }"
           class="side-link"
@@ -70,7 +72,7 @@ async function onLogout() {
         <div class="avatar">{{ initial }}</div>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="router.push({ name: 'contacts' })">顧客</el-dropdown-item>
+            <el-dropdown-item v-if="auth.can('contacts')" @click="router.push({ name: 'contacts' })">顧客</el-dropdown-item>
             <el-dropdown-item @click="router.push({ name: 'settings' })">設定</el-dropdown-item>
             <el-dropdown-item divided @click="onLogout">登出</el-dropdown-item>
           </el-dropdown-menu>

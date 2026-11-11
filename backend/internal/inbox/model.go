@@ -71,7 +71,14 @@ type Message struct {
 	MediaURL       string    `json:"mediaUrl"` // 已存到自有儲存時是 /api/inbox/media/…，否則是 IG 原始網址（可能已過期）
 	Reaction       string    `json:"reaction"` // 顧客按的表情
 	Deleted        bool      `json:"deleted"`  // 顧客已收回
+	SentBy         *Sender   `json:"sentBy"`   // 後台真人送出時是哪位管理員；自動回覆、從 IG app 回的為 null
 	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// Sender 是送出訊息的管理員。
+type Sender struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"displayName"`
 }
 
 func (s *Service) publishMessage(m Message) {

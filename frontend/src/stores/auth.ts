@@ -2,10 +2,26 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { http } from '@/api/http'
 
+// 功能權限鍵；後端（auth.AllPerms）是唯一來源，這裡只是型別
+export type Perm =
+  | 'inbox'
+  | 'contacts'
+  | 'automation'
+  | 'schedule'
+  | 'analytics'
+  | 'ig_accounts'
+  | 'credentials'
+  | 'admins'
+
 export interface AdminUser {
   id: number
   username: string
   displayName: string
+  isOwner: boolean
+  permissions: Perm[] // 有效權限：店長是完整清單
+  disabled: boolean
+  lastLoginAt: string | null
+  createdAt: string
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -35,5 +51,13 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, checked, fetchMe, login, logout }
+  // 沒指定權限＝所有登入者都可用
+  function can(perm?: Perm | null): boolean {
+    const u = user.value
+    if (!u) return false
+    if (!perm || u.isOwner) return true
+    return u.permissions.includes(perm)
+  }
+
+  return { user, checked, fetchMe, login, logout, can }
 })

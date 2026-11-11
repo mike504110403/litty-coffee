@@ -205,7 +205,8 @@ html.dark {
   .el-card {
     --el-card-bg-color: var(--lc-surface);
   }
-  .el-button--primary {
+  // 只套在實心主色按鈕；text／link／plain 是主色字壓在卡片底上，套深字會看不見
+  .el-button--primary:not(.is-text):not(.is-link):not(.is-plain) {
     --el-button-text-color: var(--lc-on-primary);
     --el-button-hover-text-color: var(--lc-on-primary);
     --el-button-active-text-color: var(--lc-on-primary);

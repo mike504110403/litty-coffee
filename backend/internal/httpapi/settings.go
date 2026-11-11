@@ -20,9 +20,6 @@ import (
 type SystemInfo struct {
 	WebOrigin     string
 	PublicBaseURL string
-	IGAppIDSet    bool
-	IGSecretSet   bool
-	AIKeySet      bool
 	Timezone      string
 }
 
@@ -35,7 +32,7 @@ func (s *Server) settingsRoutes(r chi.Router) {
 	r.Post("/ig/account/refresh", s.igRefresh)
 	r.Post("/ig/account/subscribe", s.igResubscribe)
 	r.Delete("/ig/account", s.igDisconnect)
-	r.Post("/auth/password", s.changePassword)
+	// /auth/password（所有登入者可用）在 router.go 註冊
 }
 
 func (s *Server) redirectURI() string { return s.Info.WebOrigin + "/api/ig/oauth/callback" }
@@ -54,19 +51,26 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account": acc,
 		"integration": map[string]any{
-			"oauthReady":    s.Accounts.OAuth != nil,
-			"appIdSet":      s.Info.IGAppIDSet,
-			"appSecretSet":  s.Info.IGSecretSet,
-			"verifyToken":   s.IGVerifyToken,
+			"oauthReady":    s.oauthReady(),
 			"webhookUrl":    s.Info.PublicBaseURL + "/webhooks/instagram",
 			"redirectUri":   s.redirectURI(),
 			"publicBaseUrl": s.Info.PublicBaseURL,
 			"envTokenSet":   s.Accounts.FallbackToken != "",
 			"simulator":     s.Fake != nil,
 		},
-		"ai":       map[string]any{"enabled": s.Info.AIKeySet, "model": s.AIModel},
 		"timezone": s.Info.Timezone,
 	})
+}
+
+// oauthReady 讀目前生效的 Meta App 憑證（後台存檔即時反映）。
+func (s *Server) oauthReady() bool {
+	if s.Accounts.OAuth == nil {
+		return false
+	}
+	if c, ok := s.Accounts.OAuth.(interface{ Configured() bool }); ok {
+		return c.Configured()
+	}
+	return true
 }
 
 func (s *Server) settingsRedirect(w http.ResponseWriter, r *http.Request, key, val string) {

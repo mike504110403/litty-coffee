@@ -71,7 +71,7 @@ func (s *Service) ListMessages(ctx context.Context, convID, beforeID int64, limi
 SELECT `+msgCols+` FROM (
   SELECT * FROM messages WHERE conversation_id = $1 AND ($2 = 0 OR id < $2)
   ORDER BY created_at DESC, id DESC LIMIT $3
-) m ORDER BY created_at, id`, convID, beforeID, limit)
+) m `+msgJoin+` ORDER BY m.created_at, m.id`, convID, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,11 @@ SELECT `+msgCols+` FROM (
 	return out, rows.Err()
 }
 
-const msgCols = `id, conversation_id, direction, sender_type, kind, text, media_url, media_file, reaction, deleted_at, created_at`
+const msgCols = `m.id, m.conversation_id, m.direction, m.sender_type, m.kind, m.text, m.media_url, m.media_file, m.reaction,
+  m.deleted_at, m.created_at, m.sent_by_admin_id, COALESCE(NULLIF(au.display_name, ''), au.username, '')`
+
+// msgJoin 帶出送出者（管理員）名稱；查詢須以 m 為 messages 別名。
+const msgJoin = `LEFT JOIN admin_users au ON au.id = m.sent_by_admin_id`
 
 // MediaRoute 是收件匣附件的後台路徑（需登入）。
 const MediaRoute = "/api/inbox/media/"
@@ -96,8 +100,13 @@ func scanMsg(row pgx.Row) (Message, error) {
 	var m Message
 	var file string
 	var deleted *time.Time
+	var sentByID *int64
+	var sentByName string
 	err := row.Scan(&m.ID, &m.ConversationID, &m.Direction, &m.SenderType, &m.Kind, &m.Text, &m.MediaURL, &file,
-		&m.Reaction, &deleted, &m.CreatedAt)
+		&m.Reaction, &deleted, &m.CreatedAt, &sentByID, &sentByName)
+	if sentByID != nil {
+		m.SentBy = &Sender{ID: *sentByID, DisplayName: sentByName}
+	}
 	if file != "" {
 		m.MediaURL = MediaRoute + file
 	}
@@ -106,7 +115,7 @@ func scanMsg(row pgx.Row) (Message, error) {
 }
 
 func (s *Service) GetMessage(ctx context.Context, id int64) (Message, error) {
-	return scanMsg(s.DB.QueryRow(ctx, `SELECT `+msgCols+` FROM messages WHERE id = $1`, id))
+	return scanMsg(s.DB.QueryRow(ctx, `SELECT `+msgCols+` FROM messages m `+msgJoin+` WHERE m.id = $1`, id))
 }
 
 func (s *Service) MarkRead(ctx context.Context, id int64) error {

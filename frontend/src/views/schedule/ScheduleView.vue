@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Plus, Loading, CircleCheck, Warning, Clock, EditPen } from '@element-plus/icons-vue'
 import { kindLabels, postsApi, statusLabels, type Post, type PostStatus } from '@/api/posts'
 import { crmApi } from '@/api/crm'
+import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import PostComposer from './PostComposer.vue'
 import PostInsights from './PostInsights.vue'
@@ -104,7 +105,9 @@ const statusIcon: Record<PostStatus, unknown> = {
 
 // ---- 最佳時段（依近 30 天顧客傳訊時段，取前三）----
 const bestHours = ref<number[]>([])
+const auth = useAuthStore()
 onMounted(async () => {
+  if (!auth.can('analytics')) return // 熱門時段來自分析資料
   try {
     const s = await crmApi.summary(30)
     bestHours.value = s.hours

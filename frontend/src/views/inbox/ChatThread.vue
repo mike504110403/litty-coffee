@@ -186,7 +186,7 @@ const handler = computed({
             <span v-if="m.reaction" class="reaction" :aria-label="`顧客回應 ${m.reaction}`">{{ m.reaction }}</span>
           </div>
           <div class="meta">
-            <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ senderLabel[m.senderType] }}</span>
+            <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ m.sentBy?.displayName || senderLabel[m.senderType] }}</span>
             {{ clockTime(m.createdAt) }}
             <span v-if="m.id === lastSeenOutId" class="seen">已讀</span>
           </div>

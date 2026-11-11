@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 )
@@ -149,7 +151,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	m, err := s.Inbox.Send(r.Context(), id, in.Text, "human")
+	m, err := s.Inbox.SendAsAdmin(r.Context(), id, in.Text, auth.UserID(r.Context()))
 	if err != nil {
 		s.inboxErr(w, err)
 		return
@@ -193,7 +195,8 @@ func (s *Server) inboxStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) webhookVerify(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if q.Get("hub.mode") == "subscribe" && s.IGVerifyToken != "" && q.Get("hub.verify_token") == s.IGVerifyToken {
+	token := s.Creds.Values().IGVerifyToken // 每次讀目前值：設定頁存檔即生效
+	if q.Get("hub.mode") == "subscribe" && token != "" && subtle.ConstantTimeCompare([]byte(q.Get("hub.verify_token")), []byte(token)) == 1 {
 		_, _ = io.WriteString(w, q.Get("hub.challenge"))
 		return
 	}
@@ -206,7 +209,7 @@ func (s *Server) webhookReceive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	if !ig.VerifySignature(s.IGAppSecret, body, r.Header.Get("X-Hub-Signature-256")) {
+	if !ig.VerifySignature(s.Creds.Values().IGAppSecret, body, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "bad signature", http.StatusUnauthorized)
 		return
 	}

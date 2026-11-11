@@ -22,7 +22,9 @@ func (s *Server) crmRoutes(r chi.Router) {
 	r.Post("/tags", s.createTag)
 	r.Put("/tags/{id}", s.updateTag)
 	r.Delete("/tags/{id}", s.deleteTag)
+}
 
+func (s *Server) analyticsRoutes(r chi.Router) {
 	r.Get("/analytics/summary", s.analyticsSummary)
 }
 

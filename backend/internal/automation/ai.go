@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -36,6 +37,52 @@ type AI struct {
 
 func NewAI(apiKey, model, effort string) *AI {
 	return &AI{client: anthropic.NewClient(option.WithAPIKey(apiKey)), Model: model, Effort: effort}
+}
+
+// ErrAIDisabled 表示目前沒有可用的 Claude API key。
+var ErrAIDisabled = errors.New("尚未設定 Claude API Key")
+
+// LiveAI 是可在執行期換 key／模型的 AI：內部以 atomic.Pointer 指向一個建好就不再修改的 *AI。
+// Engine.AI（Decider）與 api.CaptionAI 都持有同一個 *LiveAI，設定頁存檔後呼叫 Set 即全部生效。
+// 每次 Decide／Caption 開頭 Load 一次，整次呼叫用同一個 *AI，不會跑到一半被換掉。
+type LiveAI struct {
+	p atomic.Pointer[AI]
+}
+
+// Set 換成新的 key／模型／強度；apiKey 為空＝停用（只跑規則、文案回 503）。
+func (l *LiveAI) Set(apiKey, model, effort string) {
+	if apiKey == "" {
+		l.p.Store(nil)
+		return
+	}
+	l.p.Store(NewAI(apiKey, model, effort))
+}
+
+// Enabled 回目前有沒有可用的 key。
+func (l *LiveAI) Enabled() bool { return l.p.Load() != nil }
+
+// Model 回目前使用的模型；未啟用回空字串。
+func (l *LiveAI) Model() string {
+	if a := l.p.Load(); a != nil {
+		return a.Model
+	}
+	return ""
+}
+
+func (l *LiveAI) Decide(ctx context.Context, st Settings, kb []Knowledge, turns []Turn) (AIDecision, error) {
+	a := l.p.Load()
+	if a == nil {
+		return AIDecision{}, ErrAIDisabled
+	}
+	return a.Decide(ctx, st, kb, turns)
+}
+
+func (l *LiveAI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, kind string) (string, error) {
+	a := l.p.Load()
+	if a == nil {
+		return "", ErrAIDisabled
+	}
+	return a.Caption(ctx, st, kb, brief, kind)
 }
 
 var decisionSchema = map[string]any{

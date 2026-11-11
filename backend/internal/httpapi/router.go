@@ -11,6 +11,7 @@ import (
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
+	"github.com/mike504110403/litty-coffee/backend/internal/appsettings"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
@@ -28,17 +29,17 @@ type Server struct {
 	Hub       *realtime.Hub
 	Fake      *ig.Fake // 非 nil＝開發模擬模式
 	Auto      *automation.Engine
-	AIModel   string
+	AIModel   string // 沒設 key 時自動回覆頁顯示的模型名；有 key 時用 CaptionAI.Model()
 	CRM       *crm.Service
 	Analytics *analytics.Service
 	Media     *media.Store
 	Posts     *posts.Service
-	CaptionAI *automation.AI // nil＝沒設 key
-	Accounts  *account.Service
-	Info      SystemInfo
-
-	IGAppSecret   string
-	IGVerifyToken string
+	CaptionAI *automation.LiveAI // 與 Auto.AI 同一個；Enabled()＝false 表示沒設 key
+	Creds     *appsettings.Store // 後台可改的憑證（DB 優先於 .env）
+	// AnthropicBaseURL 非空時 test-ai 改打這個網址（測試用 httptest；正式留空＝官方 API）
+	AnthropicBaseURL string
+	Accounts         *account.Service
+	Info             SystemInfo
 }
 
 func (s *Server) Routes() http.Handler {
@@ -62,17 +63,25 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/auth/logout", s.logout)
 		r.Group(func(r chi.Router) {
 			r.Use(s.Auth.Middleware)
+			// 所有登入者都可用
 			r.Get("/auth/me", s.me)
-			s.inboxRoutes(r)
-			s.automationRoutes(r)
-			s.crmRoutes(r)
-			s.postRoutes(r)
-			s.settingsRoutes(r)
-			r.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
+			r.Post("/auth/password", s.changePassword)
+			// 各功能依權限把關（權限鍵見 auth.AllPerms）
+			perm := func(p string) chi.Router { return r.With(auth.RequirePerm(p)) }
+			s.inboxRoutes(perm(auth.PermInbox))
+			s.automationRoutes(perm(auth.PermAutomation))
+			s.crmRoutes(perm(auth.PermContacts))
+			s.analyticsRoutes(perm(auth.PermAnalytics))
+			s.postRoutes(perm(auth.PermSchedule))
+			s.settingsRoutes(perm(auth.PermIGAccounts))
+			s.credentialsRoutes(perm(auth.PermCredentials))
+			s.adminRoutes(perm(auth.PermAdmins))
+			dev := perm(auth.PermInbox)
+			dev.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
 			})
 			if s.Fake != nil {
-				r.Post("/dev/simulate", s.simulate)
+				dev.Post("/dev/simulate", s.simulate)
 			}
 		})
 	})
@@ -88,6 +97,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	u, tok, err := s.Auth.Login(r.Context(), in.Username, in.Password)
 	if errors.Is(err, auth.ErrBadCredentials) {
 		writeErr(w, http.StatusUnauthorized, "帳號或密碼錯誤")
+		return
+	}
+	if errors.Is(err, auth.ErrDisabled) {
+		writeErr(w, http.StatusForbidden, err.Error())
 		return
 	}
 	if err != nil {

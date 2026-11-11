@@ -5,6 +5,7 @@ import { ChatLineRound, MagicStick } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
 import { devApi } from '@/api/inbox'
 import { useInboxStore } from '@/stores/inbox'
+import { useAuthStore } from '@/stores/auth'
 import ConversationList from './ConversationList.vue'
 import ChatThread from './ChatThread.vue'
 import SimulatorDialog from './SimulatorDialog.vue'
@@ -23,6 +24,7 @@ const routeId = computed(() => {
 watch(routeId, (id) => void store.open(id), { immediate: true })
 
 const contactId = ref<number | null>(null)
+const auth = useAuthStore() // 顧客資料需要 contacts 權限
 const simulator = ref(false)
 const showSim = ref(false)
 
@@ -70,7 +72,7 @@ async function send(text: string) {
         @load-older="store.loadOlder(active.id)"
         @set-handler="(h) => store.patch(active!.id, { handler: h })"
         @set-status="(s) => store.patch(active!.id, { status: s })"
-        @open-contact="contactId = active!.contact.id"
+        @open-contact="auth.can('contacts') && (contactId = active!.contact.id)"
       />
       <div v-else class="placeholder">
         <el-icon :size="48"><ChatLineRound /></el-icon>

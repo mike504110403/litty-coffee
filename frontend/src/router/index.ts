@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore, type Perm } from '@/stores/auth'
 import { navItems } from './nav'
 
 const router = createRouter({
@@ -11,7 +11,7 @@ const router = createRouter({
       component: () => import('@/layouts/AppLayout.vue'),
       children: [
         { path: '', redirect: { name: 'dashboard' } },
-        ...navItems.map((n) => ({ path: n.path, name: n.name, component: n.component, meta: { title: n.title } })),
+        ...navItems.map((n) => ({ path: n.path, name: n.name, component: n.component, meta: { title: n.title, perm: n.perm } })),
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -23,6 +23,8 @@ router.beforeEach(async (to) => {
   if (!auth.checked) await auth.fetchMe()
   if (to.meta.public) return auth.user && to.name === 'login' ? { name: 'dashboard' } : true
   if (!auth.user) return { name: 'login', query: { redirect: to.fullPath } }
+  const perm = to.meta.perm as Perm | null | undefined
+  if (perm && !auth.can(perm)) return to.name === 'dashboard' ? true : { name: 'dashboard' }
   return true
 })
 
