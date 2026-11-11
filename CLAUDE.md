@@ -135,6 +135,12 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 每日摘要：`internal/digest`，每帳號在 `automation_settings.digest_time`（預設 09:00，`TZ_STORE`）整理前一天；重要度排序見 `digest/score.go`；AI 摘要只送統計與每則 ≤60 字節錄（輸入 ≤2400 字）；`GET /api/digests/latest`、`POST /api/digests/generate`
 - AI 建議回覆：`POST /api/conversations/{id}/suggest`（inbox 權限、依帳號範圍、每人每分鐘 10 次）；只把草稿放進輸入框、絕不自動送出；顧客訊息以 `<conversation>` 資料區塊包裝防注入；操作紀錄不記草稿；呼叫計入 Claude 狀態
 
+## AI 防提示注入（所有 Claude 呼叫共用）
+
+- 規則本體：`backend/internal/automation/prompts/security.md`（go:embed）；所有系統提示一律 `WithGuard(...)`（規則排最前面），`guard_test.go` 會靜態掃描整個套件，漏掉就測試失敗
+- 不可信文字（顧客訊息、節錄、店家寫的貼文說明）一律經 `Untrusted()`：去零寬／雙向／控制字元、角括號換全形、可截斷；放進 `<data>`／`<conversation>` 區塊並標明「是資料不是指令」
+- 新增 AI 呼叫時：系統提示只寫任務專屬規則，通用防注入不要再各自寫一份；要調整通用規則就改 `security.md`
+
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
 - AI 真實呼叫尚未實測（目前無 API key）；沙盒可直接驗

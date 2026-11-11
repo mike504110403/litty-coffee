@@ -121,12 +121,7 @@ func SuggestSystemPrompt(st Settings, kb []Knowledge) string {
 
 // sanitizeTurnText 讓顧客文字無法偽造區塊邊界或新的一行發言：角括號換全形，換行後縮排兩格。
 func sanitizeTurnText(s string) string {
-	s = strings.TrimSpace(s)
-	r := []rune(s)
-	if len(r) > suggestMaxTurnRunes {
-		s = string(r[:suggestMaxTurnRunes]) + "…"
-	}
-	s = strings.NewReplacer("<", "＜", ">", "＞", "\r\n", "\n", "\r", "\n").Replace(s)
+	s = Untrusted(s, suggestMaxTurnRunes) // 共用清理：隱形字元、角括號、截斷（guard.go）
 	return strings.ReplaceAll(s, "\n", "\n  ")
 }
 
@@ -182,7 +177,7 @@ func (a *AI) Suggest(ctx context.Context, st Settings, kb []Knowledge, turns []T
 		Model:     anthropic.Model(a.Model),
 		MaxTokens: suggestMaxTokens,
 		System: []anthropic.BetaTextBlockParam{{
-			Text:         SuggestSystemPrompt(st, kb),
+			Text:         WithGuard(SuggestSystemPrompt(st, kb)),
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
 		}},
 		Messages: []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(user))},
