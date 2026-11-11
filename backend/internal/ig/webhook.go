@@ -20,10 +20,23 @@ type Entry struct {
 }
 
 type Messaging struct {
-	Sender    IDRef    `json:"sender"`
-	Recipient IDRef    `json:"recipient"`
-	Timestamp int64    `json:"timestamp"` // ms
-	Message   *Message `json:"message,omitempty"`
+	Sender    IDRef     `json:"sender"`
+	Recipient IDRef     `json:"recipient"`
+	Timestamp int64     `json:"timestamp"` // ms
+	Message   *Message  `json:"message,omitempty"`
+	Read      *Read     `json:"read,omitempty"`     // messaging_seen：對方已讀到 mid
+	Reaction  *Reaction `json:"reaction,omitempty"` // message_reactions
+}
+
+type Read struct {
+	MID string `json:"mid"`
+}
+
+type Reaction struct {
+	MID      string `json:"mid"`
+	Action   string `json:"action"`   // react | unreact
+	Reaction string `json:"reaction"` // love 等代號
+	Emoji    string `json:"emoji"`
 }
 
 type IDRef struct {

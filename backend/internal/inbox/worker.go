@@ -79,6 +79,25 @@ ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &raw)
 	}
 
 	for _, r := range results {
+		switch r.event {
+		case "read":
+			if c, err := s.GetConversation(ctx, r.convID); err == nil {
+				s.publishConversation(c)
+			}
+			continue
+		case "updated":
+			s.removeMediaFile(r.oldFile)
+			if m, err := s.GetMessage(ctx, r.msgID); err == nil {
+				s.publishMessageUpdated(m)
+			}
+			if c, err := s.GetConversation(ctx, r.convID); err == nil {
+				s.publishConversation(c)
+			}
+			continue
+		}
+		if src := r.msg.MediaURL; src != "" && downloadable(r.msg.Kind) {
+			r.msg = s.saveMedia(ctx, r.msg, src)
+		}
 		if r.needsProf {
 			s.fillProfile(ctx, r.contactID, r.token, r.igsid)
 		}

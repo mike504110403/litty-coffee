@@ -25,6 +25,19 @@ async function send() {
     sending.value = false
   }
 }
+
+// 已讀／表情／收回：作用在這位客人對話裡最後一則相關訊息
+const evBusy = ref('')
+async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label = '') {
+  if (!form.username.trim()) return
+  evBusy.value = action + emoji
+  try {
+    await devApi.simulate({ username: form.username, name: form.name, action, emoji })
+    ElMessage.success(`已模擬：${label}`)
+  } finally {
+    evBusy.value = ''
+  }
+}
 </script>
 
 <template>
@@ -53,6 +66,18 @@ async function send() {
           <el-tag v-for="p in presets" :key="p" class="preset" effect="plain" round @click="form.text = p">{{ p }}</el-tag>
         </div>
       </el-form-item>
+      <el-form-item label="其他事件">
+        <div class="events">
+          <el-button size="small" :loading="evBusy === 'read'" @click="sendEvent('read', '', '客人已讀')">客人已讀</el-button>
+          <el-button size="small" :loading="evBusy === 'react❤️'" @click="sendEvent('react', '❤️', '對店家最後一則按 ❤️')">
+            對店家最後一則按 ❤️
+          </el-button>
+          <el-button size="small" :loading="evBusy === 'react'" @click="sendEvent('react', '', '取消表情')">取消表情</el-button>
+          <el-button size="small" :loading="evBusy === 'unsend'" @click="sendEvent('unsend', '', '收回客人最後一則')">
+            收回客人最後一則
+          </el-button>
+        </div>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="visible = false">關閉</el-button>
@@ -61,7 +86,7 @@ async function send() {
   </el-dialog>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .note {
   margin: -6px 0 14px;
   font-size: 13px;
@@ -84,6 +109,14 @@ async function send() {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+.events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  .el-button + .el-button {
+    margin-left: 0;
+  }
 }
 .preset {
   cursor: pointer;

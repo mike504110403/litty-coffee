@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,11 +31,13 @@ type Service struct {
 	Hub          *realtime.Hub
 	OnInbound    InboundHook
 	DefaultToken string // ig_accounts 沒存 token 時用（env IG_ACCESS_TOKEN）
+	MediaDir     string // 收到的附件存到 MediaDir/inbox/（IG 的 CDN 網址會過期）
+	Download     *http.Client
 	wake         chan struct{}
 }
 
 func NewService(db *pgxpool.Pool, m ig.Messenger, hub *realtime.Hub) *Service {
-	return &Service{DB: db, IG: m, Hub: hub, wake: make(chan struct{}, 1)}
+	return &Service{DB: db, IG: m, Hub: hub, Download: &http.Client{Timeout: 60 * time.Second}, wake: make(chan struct{}, 1)}
 }
 
 type Contact struct {
@@ -54,6 +57,7 @@ type Conversation struct {
 	LastInboundAt   *time.Time `json:"lastInboundAt"`
 	LastMessageText string     `json:"lastMessageText"`
 	WindowExpiresAt *time.Time `json:"windowExpiresAt"` // 24h 標準窗口
+	ContactReadAt   *time.Time `json:"contactReadAt"`   // 顧客最後已讀時間（之前送出的訊息都算已讀）
 	Contact         Contact    `json:"contact"`
 }
 
@@ -64,12 +68,18 @@ type Message struct {
 	SenderType     string    `json:"senderType"` // contact | bot | ai | human
 	Kind           string    `json:"kind"`
 	Text           string    `json:"text"`
-	MediaURL       string    `json:"mediaUrl"`
+	MediaURL       string    `json:"mediaUrl"` // 已存到自有儲存時是 /api/inbox/media/…，否則是 IG 原始網址（可能已過期）
+	Reaction       string    `json:"reaction"` // 顧客按的表情
+	Deleted        bool      `json:"deleted"`  // 顧客已收回
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
 func (s *Service) publishMessage(m Message) {
 	s.Hub.Publish(realtime.Event{Type: "message.created", Data: m})
+}
+
+func (s *Service) publishMessageUpdated(m Message) {
+	s.Hub.Publish(realtime.Event{Type: "message.updated", Data: m})
 }
 
 func (s *Service) publishConversation(c Conversation) {

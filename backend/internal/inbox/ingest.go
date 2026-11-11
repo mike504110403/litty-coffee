@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -24,7 +25,11 @@ func (s *Service) EnqueueWebhook(ctx context.Context, payload []byte) error {
 	return nil
 }
 
+// ingested 是一個 webhook 事件處理後要在交易外做的事。
 type ingested struct {
+	event     string // created（新訊息）| updated（表情、收回）| read（已讀）
+	msgID     int64  // updated 用
+	oldFile   string // 收回時要刪掉的本地附件
 	convID    int64
 	contactID int64
 	needsProf bool
@@ -43,10 +48,21 @@ func processPayload(ctx context.Context, tx pgx.Tx, raw []byte) ([]ingested, err
 	var out []ingested
 	for _, e := range p.Entry {
 		for _, m := range e.Messaging {
-			if m.Message == nil || m.Message.MID == "" || m.Message.IsDeleted {
-				continue // 已讀、reaction、刪除等事件之後再處理
+			var (
+				r   ingested
+				ok  bool
+				err error
+			)
+			switch {
+			case m.Read != nil:
+				r, ok, err = ingestRead(ctx, tx, e.ID, m)
+			case m.Reaction != nil:
+				r, ok, err = ingestReaction(ctx, tx, e.ID, m)
+			case m.Message != nil && m.Message.IsDeleted:
+				r, ok, err = ingestUnsend(ctx, tx, m)
+			case m.Message != nil && m.Message.MID != "":
+				r, ok, err = ingestMessage(ctx, tx, e.ID, m)
 			}
-			r, ok, err := ingestMessage(ctx, tx, e.ID, m)
 			if err != nil {
 				return nil, err
 			}
@@ -59,7 +75,7 @@ func processPayload(ctx context.Context, tx pgx.Tx, raw []byte) ([]ingested, err
 }
 
 func ingestMessage(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
-	var r ingested
+	r := ingested{event: "created"}
 	inbound := !m.Message.IsEcho
 	r.isInbound = inbound
 	r.igsid = m.Sender.ID
@@ -138,6 +154,97 @@ UPDATE conversations SET last_message_at = GREATEST(COALESCE(last_message_at, $2
 WHERE id = $1`, r.convID, ts, text)
 	}
 	return r, true, err
+}
+
+// convOf 找出（我方帳號, 顧客 igsid）對應的對話；沒有就回 0。
+func convOf(ctx context.Context, tx pgx.Tx, accountIGID, igsid string) (int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx, `
+SELECT c.id FROM conversations c JOIN contacts ct ON ct.id = c.contact_id JOIN ig_accounts a ON a.id = ct.ig_account_id
+WHERE a.ig_user_id = $1 AND ct.igsid = $2`, accountIGID, igsid).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
+// ingestRead：顧客已讀。只記時間，之前我方送出的訊息都算已讀。
+func ingestRead(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
+	if m.Sender.ID == accountIGID {
+		return ingested{}, false, nil // 我方已讀顧客訊息，後台自己有未讀數
+	}
+	convID, err := convOf(ctx, tx, accountIGID, m.Sender.ID)
+	if err != nil || convID == 0 {
+		return ingested{}, false, err
+	}
+	ts := time.UnixMilli(m.Timestamp)
+	if m.Timestamp == 0 {
+		ts = time.Now()
+	}
+	_, err = tx.Exec(ctx, `UPDATE conversations SET contact_read_at = GREATEST(COALESCE(contact_read_at, $2), $2) WHERE id = $1`, convID, ts)
+	return ingested{event: "read", convID: convID}, err == nil, err
+}
+
+// ingestReaction：只記顧客按的表情（我方在 IG App 按的不顯示）。
+func ingestReaction(ctx context.Context, tx pgx.Tx, accountIGID string, m ig.Messaging) (ingested, bool, error) {
+	if m.Sender.ID == accountIGID || m.Reaction.MID == "" {
+		return ingested{}, false, nil
+	}
+	emoji := ""
+	if m.Reaction.Action != "unreact" {
+		emoji = m.Reaction.Emoji
+		if emoji == "" {
+			emoji = reactionEmoji(m.Reaction.Reaction)
+		}
+	}
+	r := ingested{event: "updated"}
+	err := tx.QueryRow(ctx, `UPDATE messages SET reaction = $2 WHERE ig_mid = $1 RETURNING id, conversation_id`,
+		m.Reaction.MID, emoji).Scan(&r.msgID, &r.convID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, false, nil
+	}
+	return r, err == nil, err
+}
+
+func reactionEmoji(code string) string {
+	switch code {
+	case "love":
+		return "❤️"
+	case "like":
+		return "👍"
+	case "laugh", "haha":
+		return "😂"
+	case "wow":
+		return "😮"
+	case "sad":
+		return "😢"
+	case "angry":
+		return "😡"
+	}
+	return "❤️"
+}
+
+// ingestUnsend：顧客收回。清掉內容（尊重對方收回），只留「已收回」紀錄。
+func ingestUnsend(ctx context.Context, tx pgx.Tx, m ig.Messaging) (ingested, bool, error) {
+	r := ingested{event: "updated"}
+	ts := time.UnixMilli(m.Timestamp)
+	if m.Timestamp == 0 {
+		ts = time.Now()
+	}
+	var created time.Time
+	err := tx.QueryRow(ctx, `
+UPDATE messages m SET deleted_at = $2, text = '', media_url = '', media_file = '', reaction = ''
+FROM (SELECT id, media_file FROM messages WHERE ig_mid = $1 AND direction = 'in' AND deleted_at IS NULL) old
+WHERE m.id = old.id
+RETURNING m.id, m.conversation_id, old.media_file, m.created_at`, m.Message.MID, ts).Scan(&r.msgID, &r.convID, &r.oldFile, &created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, false, nil
+	}
+	if err != nil {
+		return r, false, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE conversations SET last_message_text = '[已收回訊息]' WHERE id = $1 AND last_message_at = $2`, r.convID, created)
+	return r, err == nil, err
 }
 
 func attachmentLabel(t string) string {

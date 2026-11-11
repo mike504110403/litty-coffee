@@ -39,6 +39,12 @@ export const useInboxStore = defineStore('inbox', () => {
     list.push(m)
   }
 
+  function replaceMessage(m: Message) {
+    const list = messages.value[m.conversationId]
+    const i = list?.findIndex((x) => x.id === m.id) ?? -1
+    if (list && i >= 0) list[i] = m
+  }
+
   async function loadMessages(convId: number) {
     const list = await inboxApi.messages(convId)
     messages.value[convId] = list
@@ -98,6 +104,9 @@ export const useInboxStore = defineStore('inbox', () => {
       if (m.direction === 'in' && m.conversationId === activeId.value && document.visibilityState === 'visible') {
         void inboxApi.markRead(m.conversationId)
       }
+    })
+    es.addEventListener('message.updated', (e) => {
+      replaceMessage(JSON.parse((e as MessageEvent).data) as Message)
     })
     es.addEventListener('conversation.updated', (e) => {
       const c = JSON.parse((e as MessageEvent).data) as Conversation

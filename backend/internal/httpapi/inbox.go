@@ -24,6 +24,9 @@ func (s *Server) inboxRoutes(r chi.Router) {
 	r.Get("/conversations/{id}/messages", s.listMessages)
 	r.Post("/conversations/{id}/messages", s.sendMessage)
 	r.Get("/inbox/stream", s.inboxStream)
+	r.Get("/inbox/media/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.Inbox.MediaHandler(w, r, chi.URLParam(r, "name"))
+	})
 }
 
 func idParam(r *http.Request) (int64, error) {

@@ -20,6 +20,7 @@ export interface Conversation {
   lastInboundAt: string | null
   lastMessageText: string
   windowExpiresAt: string | null
+  contactReadAt: string | null
   contact: Contact
 }
 
@@ -32,7 +33,9 @@ export interface Message {
   senderType: SenderType
   kind: string
   text: string
-  mediaUrl: string
+  mediaUrl: string // 已存檔時是 /api/inbox/media/…；否則是 IG 原始網址（可能已過期）
+  reaction: string // 顧客按的表情
+  deleted: boolean // 顧客已收回
   createdAt: string
 }
 
@@ -50,7 +53,14 @@ export const inboxApi = {
 
 export const devApi = {
   status: () => http.get<{ simulator: boolean }>('/dev/status').then((r) => r.data),
-  simulate: (body: { username: string; name?: string; text: string; image?: string }) =>
+  simulate: (body: {
+    username: string
+    name?: string
+    text?: string
+    image?: string
+    action?: 'message' | 'read' | 'react' | 'unsend'
+    emoji?: string
+  }) =>
     http.post('/dev/simulate', body),
 }
 

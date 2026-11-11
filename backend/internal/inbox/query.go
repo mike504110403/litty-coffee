@@ -3,18 +3,19 @@ package inbox
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 const convSelect = `
-SELECT c.id, c.status, c.handler, c.unread_count, c.last_message_at, c.last_inbound_at, c.last_message_text,
+SELECT c.id, c.status, c.handler, c.unread_count, c.last_message_at, c.last_inbound_at, c.last_message_text, c.contact_read_at,
        ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url
 FROM conversations c JOIN contacts ct ON ct.id = c.contact_id`
 
 func scanConv(row pgx.Row) (Conversation, error) {
 	var c Conversation
-	err := row.Scan(&c.ID, &c.Status, &c.Handler, &c.UnreadCount, &c.LastMessageAt, &c.LastInboundAt, &c.LastMessageText,
+	err := row.Scan(&c.ID, &c.Status, &c.Handler, &c.UnreadCount, &c.LastMessageAt, &c.LastInboundAt, &c.LastMessageText, &c.ContactReadAt,
 		&c.Contact.ID, &c.Contact.IGSID, &c.Contact.Username, &c.Contact.Name, &c.Contact.AvatarURL)
 	if c.LastInboundAt != nil {
 		t := c.LastInboundAt.Add(ReplyWindow)
@@ -67,7 +68,7 @@ func (s *Service) ListMessages(ctx context.Context, convID, beforeID int64, limi
 		limit = 50
 	}
 	rows, err := s.DB.Query(ctx, `
-SELECT id, conversation_id, direction, sender_type, kind, text, media_url, created_at FROM (
+SELECT `+msgCols+` FROM (
   SELECT * FROM messages WHERE conversation_id = $1 AND ($2 = 0 OR id < $2)
   ORDER BY created_at DESC, id DESC LIMIT $3
 ) m ORDER BY created_at, id`, convID, beforeID, limit)
@@ -77,13 +78,35 @@ SELECT id, conversation_id, direction, sender_type, kind, text, media_url, creat
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Direction, &m.SenderType, &m.Kind, &m.Text, &m.MediaURL, &m.CreatedAt); err != nil {
+		m, err := scanMsg(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+const msgCols = `id, conversation_id, direction, sender_type, kind, text, media_url, media_file, reaction, deleted_at, created_at`
+
+// MediaRoute 是收件匣附件的後台路徑（需登入）。
+const MediaRoute = "/api/inbox/media/"
+
+func scanMsg(row pgx.Row) (Message, error) {
+	var m Message
+	var file string
+	var deleted *time.Time
+	err := row.Scan(&m.ID, &m.ConversationID, &m.Direction, &m.SenderType, &m.Kind, &m.Text, &m.MediaURL, &file,
+		&m.Reaction, &deleted, &m.CreatedAt)
+	if file != "" {
+		m.MediaURL = MediaRoute + file
+	}
+	m.Deleted = deleted != nil
+	return m, err
+}
+
+func (s *Service) GetMessage(ctx context.Context, id int64) (Message, error) {
+	return scanMsg(s.DB.QueryRow(ctx, `SELECT `+msgCols+` FROM messages WHERE id = $1`, id))
 }
 
 func (s *Service) MarkRead(ctx context.Context, id int64) error {

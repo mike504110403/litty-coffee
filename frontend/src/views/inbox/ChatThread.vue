@@ -46,6 +46,20 @@ const windowState = computed(() => {
 const canSend = computed(() => windowState.value.kind !== 'closed')
 
 // --- 日期分組 ---
+const isImageKind = (k: string) => k === 'image' || k === 'story_reply' || k === 'story_mention'
+
+// 「已讀」只標在顧客讀過的最後一則我方訊息
+const lastSeenOutId = computed(() => {
+  const readAt = props.conversation.contactReadAt
+  if (!readAt) return 0
+  const t = new Date(readAt).getTime()
+  let id = 0
+  for (const m of props.messages ?? []) {
+    if (m.direction === 'out' && new Date(m.createdAt).getTime() <= t) id = m.id
+  }
+  return id
+})
+
 const groups = computed(() => {
   const out: { key: string; label: string; items: Message[] }[] = []
   for (const m of props.messages ?? []) {
@@ -152,20 +166,29 @@ const handler = computed({
       <template v-for="g in groups" :key="g.key">
         <div class="day"><span>{{ g.label }}</span></div>
         <div v-for="m in g.items" :key="m.id" class="msg" :class="m.direction">
-          <div class="bubble" :class="[m.senderType, { media: !!m.mediaUrl }]">
-            <el-image
-              v-if="m.mediaUrl && (m.kind === 'image' || m.kind === 'story_reply')"
-              :src="m.mediaUrl"
-              :preview-src-list="[m.mediaUrl]"
-              fit="cover"
-              class="img"
-              preview-teleported
-            />
+          <div v-if="m.deleted" class="bubble deleted">對方已收回這則訊息</div>
+          <div v-else class="bubble" :class="[m.senderType, { media: !!m.mediaUrl, reacted: !!m.reaction }]">
+            <template v-if="m.mediaUrl">
+              <video v-if="m.kind === 'video'" :src="m.mediaUrl" controls preload="metadata" class="img video" />
+              <audio v-else-if="m.kind === 'audio'" :src="m.mediaUrl" controls preload="metadata" class="audio" />
+              <el-image
+                v-else-if="isImageKind(m.kind)"
+                :src="m.mediaUrl"
+                :preview-src-list="[m.mediaUrl]"
+                fit="cover"
+                class="img"
+                preview-teleported
+              >
+                <template #error><div class="img-gone">圖片已無法顯示</div></template>
+              </el-image>
+            </template>
             <div v-if="m.text" class="text">{{ m.text }}</div>
+            <span v-if="m.reaction" class="reaction" :aria-label="`顧客回應 ${m.reaction}`">{{ m.reaction }}</span>
           </div>
           <div class="meta">
             <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ senderLabel[m.senderType] }}</span>
             {{ clockTime(m.createdAt) }}
+            <span v-if="m.id === lastSeenOutId" class="seen">已讀</span>
           </div>
         </div>
       </template>
@@ -300,6 +323,58 @@ const handler = computed({
       padding: 6px 9px 4px;
     }
   }
+}
+.bubble {
+  position: relative;
+  &.reacted {
+    margin-bottom: 12px;
+  }
+  &.deleted {
+    background: transparent;
+    border: 1px dashed var(--lc-muted);
+    color: var(--lc-muted);
+    font-size: 13px;
+    font-style: italic;
+  }
+}
+.reaction {
+  position: absolute;
+  bottom: -14px;
+  right: 8px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 12px;
+  background: var(--lc-surface);
+  border: 1px solid var(--lc-border);
+  box-shadow: 0 1px 2px rgba(59, 42, 32, 0.08);
+}
+.msg.in .reaction {
+  right: auto;
+  left: 8px;
+}
+.img-gone {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--lc-cream);
+  color: var(--lc-muted);
+  font-size: 12px;
+}
+.video {
+  height: auto;
+  max-height: 320px;
+  background: #000;
+}
+.audio {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+}
+.seen {
+  margin-left: 4px;
+  color: var(--lc-roast);
 }
 .img {
   display: block;
