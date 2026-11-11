@@ -1,4 +1,5 @@
 import { http } from './http'
+import type { Risk, RiskSource } from './inbox'
 
 export interface Tag {
   id: number
@@ -22,6 +23,12 @@ export interface CrmContact {
   inboundCount: number
   lastIntent: string
   tags: Tag[]
+  risk: Risk
+  riskReason: string
+  riskSource: RiskSource
+  riskAt: string | null
+  riskBy: string // 操作的管理員；自動標記為空
+  throttleLevel: number // 降頻等級：0＝正常
 }
 
 export interface ContactDetail extends CrmContact {
@@ -67,7 +74,7 @@ export interface Summary {
 }
 
 export const crmApi = {
-  contacts: (params: { q?: string; tag?: number; sort?: string; account?: number } = {}) =>
+  contacts: (params: { q?: string; tag?: number; sort?: string; account?: number; risk?: Risk } = {}) =>
     http.get<CrmContact[]>('/contacts', { params }).then((r) => r.data),
   contact: (id: number) => http.get<ContactDetail>(`/contacts/${id}`).then((r) => r.data),
   updateContact: (id: number, body: { note?: string; tagIds?: number[] }) =>

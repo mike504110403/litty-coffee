@@ -6,6 +6,26 @@ export interface Contact {
   username: string
   name: string
   avatarUrl: string
+  risk: Risk // '' 一般｜watch 問題顧客｜blocked 黑名單
+  riskReason: string
+  riskSource: RiskSource
+  riskAt: string | null
+  throttleLevel: number // 降頻等級：0＝正常；N≥1＝自動回覆每 5×2^(N-1) 分鐘最多一次（上限 6 小時）
+}
+
+// 降頻等級對應的最短回覆間隔（分鐘）
+export const throttleMinutes = (level: number) => (level <= 0 ? 0 : Math.min(5 * 2 ** (level - 1), 360))
+
+// 顧客標記：blocked＝黑名單（訊息照收，但 AI 不回、不發轉真人通知）；watch＝問題顧客（AI 照常回）。
+// 短時間大量訊息只會標 watch（來源 rate）並降低自動回覆頻率，不會封鎖。
+export type Risk = '' | 'watch' | 'blocked'
+export type RiskSource = '' | 'manual' | 'rate' | 'ai'
+export const riskLabels: Record<Exclude<Risk, ''>, string> = { blocked: '黑名單', watch: '問題顧客' }
+export const riskSourceLabels: Record<RiskSource, string> = {
+  '': '',
+  manual: '手動',
+  rate: '自動（短時間大量訊息）',
+  ai: '自動（AI 判斷騷擾）',
 }
 
 export type Handler = 'bot' | 'human'

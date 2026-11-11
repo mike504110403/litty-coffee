@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ChatDotRound, MagicStick, Timer, Calendar } from '@element-plus/icons-vue'
+import { ChatDotRound, MagicStick, Timer, Calendar, EditPen, ArrowRight } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
 import { postsApi } from '@/api/posts'
+import { flagsApi } from '@/api/flags'
 import { formatCount, formatDuration, formatPercent } from '@/utils/format'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
@@ -19,17 +20,20 @@ const greeting = computed(() => {
 
 const today = ref<Summary | null>(null)
 const upcoming = ref<number | null>(null)
+const openReviews = ref<number | null>(null)
 // 各區塊依權限顯示；沒權限的 API 不打（後端會 403）
 const canAnalytics = computed(() => auth.can('analytics'))
 const canSchedule = computed(() => auth.can('schedule'))
+const canAutomation = computed(() => auth.can('automation'))
 // 帳號篩選（null＝全部帳號）
 const accounts = useAccountsStore()
 const account = ref<number | null>(null)
 async function load() {
   const acc = account.value ?? undefined
-  ;[today.value, upcoming.value] = await Promise.all([
+  ;[today.value, upcoming.value, openReviews.value] = await Promise.all([
     canAnalytics.value ? crmApi.summary(1, acc) : null,
     canSchedule.value ? postsApi.upcomingCount(acc) : null,
+    canAutomation.value ? flagsApi.openCount(acc) : null,
   ])
 }
 onMounted(() => {
@@ -67,7 +71,12 @@ const steps = computed(() =>
         <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
         <p class="lc-page-sub">今天店裡的 IG 狀況一覽</p>
       </div>
-      <AccountSelect v-if="accounts.multi && stats.length" v-model="account" allow-all class="acc-filter" />
+      <AccountSelect
+        v-if="accounts.multi && (stats.length || canAutomation)"
+        v-model="account"
+        allow-all
+        class="acc-filter"
+      />
     </div>
 
     <div v-if="stats.length" class="stats">
@@ -79,6 +88,24 @@ const steps = computed(() =>
         <div class="stat-label">{{ s.label }}</div>
       </div>
     </div>
+
+    <router-link
+      v-if="canAutomation && openReviews != null"
+      :to="{ name: 'automation', query: { tab: 'reviews' } }"
+      class="reviews lc-card"
+      :class="{ empty: openReviews === 0 }"
+    >
+      <div class="stat-icon rose">
+        <el-icon :size="18"><EditPen /></el-icon>
+      </div>
+      <div class="rv-body">
+        <div class="rv-title">待改進問答 {{ openReviews }} 則</div>
+        <div class="rv-desc">
+          {{ openReviews ? 'AI 答錯或沒把握的問題，補進知識庫後 AI 會更準' : '目前沒有待處理的問答' }}
+        </div>
+      </div>
+      <el-icon class="rv-arrow"><ArrowRight /></el-icon>
+    </router-link>
 
     <div v-if="steps.length" class="onboard lc-card">
       <h3>開始設定</h3>
@@ -146,6 +173,42 @@ const steps = computed(() =>
 .stat-label {
   margin-top: 2px;
   font-size: 13px;
+  color: var(--lc-muted);
+}
+
+.reviews {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.12s;
+  .stat-icon {
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+  &:hover {
+    background: var(--lc-bg-hover);
+  }
+  &.empty .rv-title {
+    color: var(--lc-muted);
+  }
+}
+.rv-body {
+  flex: 1;
+  min-width: 0;
+}
+.rv-title {
+  font-weight: 600;
+}
+.rv-desc {
+  font-size: 13px;
+  color: var(--lc-muted);
+  margin-top: 2px;
+}
+.rv-arrow {
   color: var(--lc-muted);
 }
 

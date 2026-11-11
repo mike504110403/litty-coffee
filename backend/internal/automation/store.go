@@ -41,6 +41,12 @@ type Settings struct {
 	Persona        string `json:"persona"`
 	HandoffMessage string `json:"handoffMessage"`
 	DebounceSecs   int    `json:"debounceSecs"`
+	// 大量訊息：spamWindowSecs 秒內顧客傳超過 spamMaxMsgs 則就降低自動回覆頻率（不封鎖）；spamMaxMsgs=0＝關閉
+	SpamMaxMsgs    int  `json:"spamMaxMsgs"`
+	SpamWindowSecs int  `json:"spamWindowSecs"`
+	AIModeration   bool `json:"aiModeration"` // AI 回覆時順便判斷是否騷擾／惡意，是就自動列入黑名單
+	// Throttled 不存 DB：引擎在顧客降頻中時設成 true，請 AI 回得簡短、委婉
+	Throttled bool `json:"-"`
 }
 
 // Store 的資料都依 IG 帳號（ig_accounts.id）區分；ig_account_id IS NULL 的是「範本」，
@@ -73,8 +79,9 @@ func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `
-INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, ig_account_id)
-SELECT ai_enabled, persona, handoff_message, debounce_secs, $1 FROM automation_settings WHERE ig_account_id IS NULL
+INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation, ig_account_id)
+SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation, $1
+FROM automation_settings WHERE ig_account_id IS NULL
 ON CONFLICT (ig_account_id) DO NOTHING`, accountID)
 	if err != nil {
 		return err
@@ -269,8 +276,10 @@ func (s *Store) GetSettings(ctx context.Context, accountID int64) (Settings, err
 	if err := s.EnsureAccount(ctx, accountID); err != nil {
 		return st, err
 	}
-	err := s.DB.QueryRow(ctx, `SELECT ai_enabled, persona, handoff_message, debounce_secs FROM automation_settings WHERE ig_account_id=$1`,
-		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs)
+	err := s.DB.QueryRow(ctx, `
+SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation
+FROM automation_settings WHERE ig_account_id=$1`,
+		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration)
 	return st, err
 }
 
@@ -278,12 +287,19 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	if st.DebounceSecs < 0 || st.DebounceSecs > 30 {
 		return st, errors.New("合併等待秒數需在 0～30")
 	}
+	if st.SpamMaxMsgs < 0 || st.SpamMaxMsgs > 500 {
+		return st, errors.New("大量訊息門檻需在 0～500 則（0＝關閉）")
+	}
+	if st.SpamMaxMsgs > 0 && (st.SpamWindowSecs < 60 || st.SpamWindowSecs > 24*3600) {
+		return st, errors.New("大量訊息的時間範圍需在 1～1440 分鐘")
+	}
 	if err := s.EnsureAccount(ctx, accountID); err != nil {
 		return st, err
 	}
 	st.Persona, st.HandoffMessage = strings.TrimSpace(st.Persona), strings.TrimSpace(st.HandoffMessage)
 	_, err := s.DB.Exec(ctx, `
-UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4, updated_at=now() WHERE ig_account_id=$5`,
-		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID)
+UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4,
+  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, updated_at=now() WHERE ig_account_id=$5`,
+		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration)
 	return st, err
 }

@@ -6,6 +6,7 @@ import RulesPanel from './RulesPanel.vue'
 import KnowledgePanel from './KnowledgePanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SandboxPanel from './SandboxPanel.vue'
+import ReviewsPanel from './ReviewsPanel.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
 
@@ -17,6 +18,7 @@ const tabs = [
   { key: 'knowledge', label: '店家知識庫' },
   { key: 'ai', label: 'AI 設定' },
   { key: 'sandbox', label: '試答沙盒' },
+  { key: 'reviews', label: '待改進' },
 ] as const
 type TabKey = (typeof tabs)[number]['key']
 
@@ -70,6 +72,12 @@ onMounted(async () => {
         :key="`s${accountId}`"
         :account-id="accountId"
         :ai-configured="!!status?.aiConfigured"
+      />
+      <ReviewsPanel
+        v-else-if="tab === 'reviews'"
+        :key="`v${accountId}`"
+        :account-id="accountId"
+        @go-knowledge="tab = 'knowledge'"
       />
       <SandboxPanel v-else :key="`t${accountId}`" :account-id="accountId" :ai-configured="!!status?.aiConfigured" />
     </template>

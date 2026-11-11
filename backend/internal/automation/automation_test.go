@@ -78,16 +78,18 @@ func TestBuildMessages(t *testing.T) {
 // ---- 整合測試（需要 TEST_DATABASE_URL） ----
 
 type fakeAI struct {
-	d       AIDecision
-	calls   int
-	persona string      // 最近一次呼叫用的人設
-	kb      []Knowledge // 最近一次呼叫用的知識庫
+	d         AIDecision
+	err       error // 非 nil 時回這個錯（例如 ErrRefused）
+	throttled bool  // 最近一次呼叫是否在降頻模式
+	calls     int
+	persona   string      // 最近一次呼叫用的人設
+	kb        []Knowledge // 最近一次呼叫用的知識庫
 }
 
 func (f *fakeAI) Decide(_ context.Context, st Settings, kb []Knowledge, _ []Turn) (AIDecision, error) {
 	f.calls++
-	f.persona, f.kb = st.Persona, kb
-	return f.d, nil
+	f.persona, f.kb, f.throttled = st.Persona, kb, st.Throttled
+	return f.d, f.err
 }
 
 // setup 清空資料、放一份範本（ai 開、不等待、轉真人訊息「請稍等店員」）並連好測試帳號 "acct"，回傳其 id。

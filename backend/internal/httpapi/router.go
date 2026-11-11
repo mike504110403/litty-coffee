@@ -70,8 +70,12 @@ func (s *Server) Routes() http.Handler {
 			// 各功能依權限把關（權限鍵見 auth.AllPerms）
 			perm := func(p string) chi.Router { return r.With(auth.RequirePerm(p)) }
 			s.inboxRoutes(perm(auth.PermInbox))
+			s.reviewInboxRoutes(perm(auth.PermInbox))
 			s.automationRoutes(perm(auth.PermAutomation))
+			s.reviewRoutes(perm(auth.PermAutomation))
 			s.crmRoutes(perm(auth.PermContacts))
+			// 顧客標記（黑名單／問題顧客）收件匣也能改；備註與標籤仍限顧客權限（見 patchContact）
+			r.With(auth.RequireAnyPerm(auth.PermContacts, auth.PermInbox)).Patch("/contacts/{id}", s.patchContact)
 			s.analyticsRoutes(perm(auth.PermAnalytics))
 			s.postRoutes(perm(auth.PermSchedule))
 			s.settingsRoutes(perm(auth.PermIGAccounts))

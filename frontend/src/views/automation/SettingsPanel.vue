@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { automationApi, type AutoSettings } from '@/api/automation'
 
@@ -10,6 +10,14 @@ const saving = ref(false)
 
 onMounted(async () => {
   form.value = await automationApi.settings(props.accountId)
+})
+
+// 大量訊息的時間範圍：介面用分鐘、API 用秒
+const spamMinutes = computed({
+  get: () => Math.max(1, Math.round((form.value?.spamWindowSecs ?? 300) / 60)),
+  set: (v: number | undefined) => {
+    if (form.value) form.value.spamWindowSecs = Math.max(1, Math.round(v ?? 5)) * 60
+  },
 })
 
 async function save() {
@@ -62,6 +70,30 @@ async function save() {
         <el-slider v-model="form.debounceSecs" :min="0" :max="15" show-input class="slider" />
         <div class="help">客人常一次連傳好幾則；等這段時間沒有新訊息才回，避免一則一則各回一次。</div>
       </el-form-item>
+
+      <h3 class="section">騷擾與大量訊息</h3>
+      <el-form-item label="大量訊息門檻">
+        <div class="spam-row">
+          <el-input-number v-model="spamMinutes" :min="1" :max="1440" :step="1" controls-position="right" class="num" />
+          <span>分鐘內超過</span>
+          <el-input-number v-model="form.spamMaxMsgs" :min="0" :max="500" :step="1" controls-position="right" class="num" />
+          <span>則</span>
+        </div>
+        <div class="help">
+          超過門檻後降低回覆頻率（不會封鎖）：自動標成問題顧客，之後每 5、10、20…分鐘最多自動回一次，AI 會回得簡短並請對方稍候店員；顧客安靜一段時間後恢復。填 0 則＝關閉。
+        </div>
+      </el-form-item>
+      <el-form-item>
+        <div class="switch-row">
+          <div>
+            <div class="label">AI 判斷騷擾</div>
+            <div class="desc">
+              AI 回覆時順便判斷是否為騷擾、辱罵、性內容、詐騙或打聽他人個資，是就自動列入黑名單、不回覆。一般客訴不算，仍會轉真人。
+            </div>
+          </div>
+          <el-switch v-model="form.aiModeration" />
+        </div>
+      </el-form-item>
       <el-button type="primary" native-type="submit" :loading="saving">儲存設定</el-button>
     </el-form>
   </div>
@@ -99,6 +131,21 @@ async function save() {
 }
 .slider {
   width: 100%;
+}
+.section {
+  margin: 28px 0 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--lc-border);
+  font-size: 15px;
+}
+.spam-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  .num {
+    width: 110px;
+  }
 }
 @media (max-width: 768px) {
   .wrap {

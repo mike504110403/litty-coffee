@@ -29,6 +29,9 @@ export interface AutoSettings {
   persona: string
   handoffMessage: string
   debounceSecs: number
+  spamMaxMsgs: number // 大量訊息門檻：spamWindowSecs 秒內超過幾則就自動列入黑名單；0＝關閉
+  spamWindowSecs: number
+  aiModeration: boolean // AI 判斷騷擾／惡意，是就自動列入黑名單
 }
 
 export interface AIDecision {
@@ -36,10 +39,12 @@ export interface AIDecision {
   reply: string
   intent: string
   reason: string
+  abusive?: boolean
+  abuseReason?: string
 }
 
 export interface Outcome {
-  kind: 'rule' | 'ai' | 'handoff' | 'none'
+  kind: 'rule' | 'ai' | 'handoff' | 'block' | 'none'
   rule?: Rule
   ai?: AIDecision
   reply: string

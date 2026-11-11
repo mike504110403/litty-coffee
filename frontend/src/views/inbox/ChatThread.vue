@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, Promotion, Check, RefreshLeft } from '@element-plus/icons-vue'
-import { contactLabel, type Conversation, type Message } from '@/api/inbox'
+import { ElMessage } from 'element-plus'
+import { ArrowLeft, Promotion, Check, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
+import { contactLabel, riskSourceLabels, throttleMinutes, type Conversation, type Message } from '@/api/inbox'
+import { flagsApi, type RiskResult } from '@/api/flags'
 import ContactAvatar from '@/components/ContactAvatar.vue'
 import AccountTag from '@/components/AccountTag.vue'
+import RiskTag from '@/components/RiskTag.vue'
+import RiskMenu from '@/components/RiskMenu.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { clockTime, dayKey, dayLabel } from '@/utils/time'
 
@@ -21,6 +25,7 @@ const emit = defineEmits<{
   'set-handler': [h: 'bot' | 'human']
   'set-status': [s: 'open' | 'closed']
   'open-contact': []
+  'risk-changed': [r: RiskResult]
 }>()
 
 const scroller = ref<HTMLElement>()
@@ -132,6 +137,44 @@ async function submit() {
   }
 }
 
+// --- 標記「回答有誤」（只限 AI／規則的自動回覆） ---
+const isAutoReply = (m: Message) => m.direction === 'out' && (m.senderType === 'ai' || m.senderType === 'bot') && !m.deleted
+const flagged = ref(new Set<number>()) // 這次開著時標過的（後端未處理前不能重複標）
+const wrongMsg = ref<Message | null>(null)
+const wrongNote = ref('')
+const wrongSaving = ref(false)
+const wrongOpen = computed({
+  get: () => wrongMsg.value !== null,
+  set: (v) => {
+    if (!v) wrongMsg.value = null
+  },
+})
+function openWrong(m: Message) {
+  wrongMsg.value = m
+  wrongNote.value = ''
+}
+async function submitWrong() {
+  const m = wrongMsg.value
+  if (!m || !wrongNote.value.trim()) return
+  wrongSaving.value = true
+  try {
+    await flagsApi.markWrong(m.id, wrongNote.value.trim())
+    flagged.value.add(m.id)
+    ElMessage.success('已記到「自動回覆 → 待改進」')
+    wrongMsg.value = null
+  } catch (e) {
+    // 409＝已經標過、尚未處理
+    if ((e as { response?: { status?: number } }).response?.status === 409) {
+      flagged.value.add(m.id)
+      wrongMsg.value = null
+    }
+  } finally {
+    wrongSaving.value = false
+  }
+}
+
+const riskSourceText = computed(() => riskSourceLabels[props.conversation.contact.riskSource] || '手動')
+
 const handler = computed({
   get: () => props.conversation.handler,
   set: (v) => emit('set-handler', v),
@@ -144,7 +187,10 @@ const handler = computed({
       <el-button class="back" text circle :icon="ArrowLeft" @click="emit('back')" />
       <ContactAvatar :contact="conversation.contact" :size="38" class="clickable" @click="emit('open-contact')" />
       <div class="who clickable" title="顧客資料" @click="emit('open-contact')">
-        <div class="name">{{ contactLabel(conversation.contact) }}</div>
+        <div class="name-row">
+          <span class="name">{{ contactLabel(conversation.contact) }}</span>
+          <RiskTag :risk="conversation.contact.risk" />
+        </div>
         <div v-if="conversation.contact.username || accountsStore.multi" class="handle">
           <span v-if="conversation.contact.username">@{{ conversation.contact.username }}</span>
           <span v-if="accountsStore.multi" class="via">
@@ -152,6 +198,12 @@ const handler = computed({
           </span>
         </div>
       </div>
+      <RiskMenu
+        :contact-id="conversation.contact.id"
+        :risk="conversation.contact.risk"
+        size="small"
+        @changed="(r) => emit('risk-changed', r)"
+      />
       <el-segmented
         v-model="handler"
         size="small"
@@ -168,6 +220,30 @@ const handler = computed({
         />
       </el-tooltip>
     </header>
+
+    <div v-if="conversation.contact.risk === 'blocked'" class="risk-banner blocked" role="status">
+      <el-icon><WarningFilled /></el-icon>
+      <span>
+        此顧客在黑名單：AI 不會回覆、不會通知（<template v-if="conversation.contact.riskReason"
+          >原因：{{ conversation.contact.riskReason }}，</template
+        >來源：{{ riskSourceText }}）
+      </span>
+    </div>
+    <div
+      v-else-if="conversation.contact.risk === 'watch' || conversation.contact.throttleLevel > 0"
+      class="risk-banner watch"
+      role="status"
+    >
+      <el-icon><WarningFilled /></el-icon>
+      <span>
+        <template v-if="conversation.contact.risk === 'watch'">問題顧客</template>
+        <template v-if="conversation.contact.throttleLevel > 0">
+          {{ conversation.contact.risk === 'watch' ? '・' : '' }}已降低自動回覆頻率（每
+          {{ throttleMinutes(conversation.contact.throttleLevel) }} 分鐘最多回一次）</template
+        ><template v-else>：AI 照常回覆，回覆時請留意</template
+        ><template v-if="conversation.contact.riskReason">（原因：{{ conversation.contact.riskReason }}）</template>
+      </span>
+    </div>
 
     <div ref="scroller" class="t-body" @scroll.passive="onScroll">
       <div v-if="hasMore" class="more">往上捲載入更早的訊息</div>
@@ -198,6 +274,10 @@ const handler = computed({
             <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ m.sentBy?.displayName || senderLabel[m.senderType] }}</span>
             {{ clockTime(m.createdAt) }}
             <span v-if="m.id === lastSeenOutId" class="seen">已讀</span>
+            <template v-if="isAutoReply(m)">
+              <span v-if="flagged.has(m.id)" class="flag-done">已標記有誤</span>
+              <button v-else type="button" class="flag-wrong" @click="openWrong(m)">回答有誤</button>
+            </template>
           </div>
         </div>
       </template>
@@ -227,6 +307,23 @@ const handler = computed({
       </div>
       <div v-if="conversation.handler === 'bot'" class="hint">送出訊息後會自動切成「真人」，AI 暫停回覆這位顧客</div>
     </footer>
+
+    <el-dialog v-model="wrongOpen" title="標記回答有誤" width="min(460px, 92vw)" append-to-body align-center>
+      <div v-if="wrongMsg" class="wrong-quote">{{ wrongMsg.text }}</div>
+      <el-input
+        v-model="wrongNote"
+        type="textarea"
+        :autosize="{ minRows: 3, maxRows: 6 }"
+        maxlength="500"
+        show-word-limit
+        placeholder="哪裡有誤、正確答案是什麼？例如：週一公休，不是營業到八點"
+      />
+      <p class="wrong-hint">會記到「自動回覆 → 待改進」，之後可補進知識庫或調整規則。</p>
+      <template #footer>
+        <el-button @click="wrongOpen = false">取消</el-button>
+        <el-button type="primary" :loading="wrongSaving" :disabled="!wrongNote.trim()" @click="submitWrong">送出</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -255,6 +352,12 @@ const handler = computed({
 .who {
   flex: 1;
   min-width: 0;
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .name {
     font-weight: 700;
     overflow: hidden;
@@ -265,6 +368,61 @@ const handler = computed({
     font-size: 12px;
     color: var(--lc-muted);
   }
+}
+.risk-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--lc-border);
+  .el-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  &.blocked {
+    background: var(--lc-fail-bg);
+    color: var(--lc-fail-fg);
+  }
+  &.watch {
+    background: var(--lc-warn-bg);
+    color: var(--lc-warn-fg);
+  }
+}
+.flag-wrong {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--lc-muted);
+  text-decoration: underline dotted;
+  cursor: pointer;
+  &:hover,
+  &:focus-visible {
+    color: var(--lc-tone-rose-fg);
+  }
+}
+.flag-done {
+  margin-left: 6px;
+  color: var(--lc-tone-rose-fg);
+}
+.wrong-quote {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--el-color-primary);
+  background: var(--lc-bg-soft);
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.wrong-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--lc-muted);
 }
 .t-body {
   flex: 1;

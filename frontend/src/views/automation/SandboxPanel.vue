@@ -23,6 +23,7 @@ const kindLabel: Record<Outcome['kind'], string> = {
   rule: '關鍵字規則',
   ai: 'AI 回覆',
   handoff: '轉真人',
+  block: 'AI 判斷騷擾',
   none: '不回覆',
 }
 
@@ -87,7 +88,10 @@ function onKeydown(ev: Event | KeyboardEvent) {
           <span v-if="l.outcome.ai">意圖：{{ intentLabels[l.outcome.ai.intent] ?? l.outcome.ai.intent }}</span>
           <span v-if="l.elapsedMs != null">{{ (l.elapsedMs / 1000).toFixed(1) }} 秒</span>
           <div v-if="l.outcome.ai?.reason" class="reason">AI 判斷：{{ l.outcome.ai.reason }}</div>
-          <div v-if="l.outcome.detail" class="reason">{{ l.outcome.detail }}</div>
+          <div v-if="l.outcome.kind === 'block'" class="reason">
+            {{ l.outcome.detail }}。正式環境會把這位顧客列入黑名單、不回覆（沙盒不會寫入）。
+          </div>
+          <div v-else-if="l.outcome.detail" class="reason">{{ l.outcome.detail }}</div>
         </div>
       </div>
       <div v-if="busy" class="msg out">
@@ -208,6 +212,9 @@ function onKeydown(ev: Event | KeyboardEvent) {
   }
   &.handoff {
     color: var(--lc-tone-caramel-fg);
+  }
+  &.block {
+    color: var(--lc-fail-fg);
   }
 }
 .typing {

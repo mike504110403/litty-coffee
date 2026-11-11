@@ -203,3 +203,101 @@ func TestMigration10PlaceholderAccount(t *testing.T) {
 		t.Fatal("down: 佔位帳號應移除、範本規則保留")
 	}
 }
+
+// 00012：既有顧客、對話、訊息、自動回覆設定原封不動；新欄位都帶預設（顧客未標記；每列設定含範本都是 10 則／300 秒／判斷騷擾開）。
+// Down 再 Up 也要能跑，且資料保留。
+func TestMigration12FlagsPreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 11); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id, username) VALUES ('acc-a', 'a'), ('acc-b', 'b')`)
+	mustExec(t, d, `INSERT INTO contacts (ig_account_id, igsid, username, note) VALUES (1, 'u1', 'alice', '常客'), (2, 'u2', 'bob', '')`)
+	mustExec(t, d, `INSERT INTO conversations (contact_id, handler) VALUES (1, 'human'), (2, 'bot')`)
+	mustExec(t, d, `INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, text) VALUES
+(1, 'm1', 'in', 'contact', '你好'), (1, 'm2', 'out', 'ai', '哈囉')`)
+	mustExec(t, d, `INSERT INTO automation_settings (ig_account_id, persona, debounce_secs) VALUES (1, 'A 人設', 7)`)
+	mustExec(t, d, `UPDATE automation_settings SET persona = '範本人設' WHERE ig_account_id IS NULL`)
+	settingsBefore := intOf(t, d, `SELECT count(*) FROM automation_settings`)
+
+	if err := goose.UpToContext(ctx, d, "migrations", 12); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM contacts`) != 2 || intOf(t, d, `SELECT count(*) FROM conversations`) != 2 ||
+		intOf(t, d, `SELECT count(*) FROM messages`) != 2 || intOf(t, d, `SELECT count(*) FROM automation_settings`) != settingsBefore {
+		t.Fatal("核心資料數量變了")
+	}
+	if strOf(t, d, `SELECT note FROM contacts WHERE id = 1`) != "常客" || strOf(t, d, `SELECT handler FROM conversations WHERE id = 1`) != "human" {
+		t.Fatal("既有欄位值變了")
+	}
+	if intOf(t, d, `SELECT count(*) FROM contacts WHERE risk = '' AND risk_reason = '' AND risk_source = '' AND risk_at IS NULL AND risk_by_admin_id IS NULL`) != 2 {
+		t.Fatal("既有顧客應為未標記")
+	}
+	if intOf(t, d, `SELECT count(*) FROM automation_settings WHERE spam_max_msgs = 10 AND spam_window_secs = 300 AND ai_moderation`) != settingsBefore {
+		t.Fatal("既有設定（含範本）應帶預設門檻與騷擾判斷")
+	}
+	if strOf(t, d, `SELECT persona FROM automation_settings WHERE ig_account_id = 1`) != "A 人設" ||
+		strOf(t, d, `SELECT persona FROM automation_settings WHERE ig_account_id IS NULL`) != "範本人設" {
+		t.Fatal("既有設定值變了")
+	}
+	// 約束：標記值、未處理的同訊息同種只能一筆
+	if _, err := d.Exec(`UPDATE contacts SET risk = 'evil' WHERE id = 1`); err == nil {
+		t.Fatal("risk 應有 CHECK")
+	}
+	mustExec(t, d, `INSERT INTO message_reviews (message_id, ig_account_id, kind, note) VALUES (2, 1, 'ai_wrong', '錯')`)
+	if _, err := d.Exec(`INSERT INTO message_reviews (message_id, ig_account_id, kind) VALUES (2, 1, 'ai_wrong')`); err == nil {
+		t.Fatal("未處理的同訊息同種應只能一筆")
+	}
+	mustExec(t, d, `UPDATE message_reviews SET resolved_at = now()`)
+	mustExec(t, d, `INSERT INTO message_reviews (message_id, ig_account_id, kind) VALUES (2, 1, 'ai_wrong')`)
+	mustExec(t, d, `UPDATE contacts SET risk = 'blocked', risk_source = 'rate', risk_at = now() WHERE id = 2`)
+
+	if err := goose.DownToContext(ctx, d, "migrations", 11); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema()
+  AND ((table_name = 'contacts' AND column_name LIKE 'risk%') OR (table_name = 'automation_settings' AND column_name IN ('spam_max_msgs', 'spam_window_secs', 'ai_moderation')))`) != 0 {
+		t.Fatal("down: 新欄位應移除")
+	}
+	if intOf(t, d, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'message_reviews'`) != 0 {
+		t.Fatal("down: message_reviews 應移除")
+	}
+	if intOf(t, d, `SELECT count(*) FROM contacts`) != 2 || intOf(t, d, `SELECT count(*) FROM messages`) != 2 ||
+		intOf(t, d, `SELECT count(*) FROM automation_settings`) != settingsBefore {
+		t.Fatal("down: 既有資料應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 00013：降頻等級欄位，既有顧客一律 0（正常）；Down 再 Up 可重跑。
+func TestMigration13ThrottlePreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 12); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acc-a')`)
+	mustExec(t, d, `INSERT INTO contacts (ig_account_id, igsid, risk, risk_source) VALUES (1, 'u1', 'watch', 'manual'), (1, 'u2', '', '')`)
+	if err := goose.UpToContext(ctx, d, "migrations", 13); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM contacts WHERE throttle_level = 0`) != 2 ||
+		strOf(t, d, `SELECT risk FROM contacts WHERE igsid = 'u1'`) != "watch" {
+		t.Fatal("既有顧客應為 0 級、標記保留")
+	}
+	if _, err := d.Exec(`UPDATE contacts SET throttle_level = -1`); err == nil {
+		t.Fatal("throttle_level 應有 CHECK")
+	}
+	if err := goose.DownToContext(ctx, d, "migrations", 12); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM contacts`) != 2 {
+		t.Fatal("down: 顧客應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}

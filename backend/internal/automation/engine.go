@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +20,7 @@ type Decider interface {
 
 // Outcome 描述自動回覆對一則訊息的處理結果（試答沙盒也用它）。
 type Outcome struct {
-	Kind   string      `json:"kind"` // rule | ai | handoff | none
+	Kind   string      `json:"kind"` // rule | ai | handoff | block（AI 判斷騷擾）| none
 	Rule   *Rule       `json:"rule,omitempty"`
 	AI     *AIDecision `json:"ai,omitempty"`
 	Reply  string      `json:"reply"`
@@ -75,8 +77,16 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 	if err != nil {
 		return err
 	}
+	if conv.Contact.Risk == inbox.RiskBlocked {
+		return nil // 黑名單：訊息照收，但不跑規則與 AI、不發轉真人通知
+	}
 	if conv.Handler != "bot" {
 		return nil // 真人接手中
+	}
+	// 降頻（大量訊息）：比規則還早判斷；每則顧客訊息都檢查（含稍後會因有更新訊息而略過的）
+	level, err := e.updateThrottle(ctx, conv, msgID, st)
+	if err != nil {
+		return err
 	}
 	history, err := e.Inbox.ListMessages(ctx, convID, 0, historyTurns)
 	if err != nil || len(history) == 0 {
@@ -86,15 +96,35 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 	if last.ID != msgID {
 		return nil // 有更新的訊息（或店家已回覆），交給後面那次處理
 	}
+	if level > 0 {
+		// 降頻中：距上次自動回覆未滿目前間隔就只收不回
+		lastReply, err := e.Inbox.LastAutoReplyAt(ctx, convID)
+		if err != nil {
+			return err
+		}
+		if lastReply != nil && time.Since(*lastReply) < ThrottleInterval(level) {
+			return nil
+		}
+		st.Throttled = true // 請 AI 回得簡短、委婉
+	}
 
 	out, err := e.Evaluate(ctx, conv.IGAccountID, st, history)
 	if err != nil {
 		return err
 	}
+	if level > 0 && out.Kind != "block" && out.Reply != "" {
+		// 降頻中回了一次 → 間隔加倍（送出失敗也升級，避免一直重試）
+		if err := e.Inbox.SetThrottle(ctx, conv.Contact.ID, min(level+1, maxThrottleLevel)); err != nil {
+			log.Printf("automation: throttle level: %v", err)
+		}
+	}
 	if out.AI != nil {
 		e.tagIntent(ctx, msgID, out.AI.Intent)
 	}
 	switch out.Kind {
+	case "block":
+		_, err := e.Inbox.AutoBlock(ctx, conv.Contact.ID, out.Detail)
+		return err
 	case "rule":
 		e.Store.RecordHit(ctx, out.Rule.ID)
 		if out.Reply != "" {
@@ -125,6 +155,10 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 		}
 		if reason == "" {
 			reason = "AI 沒把握回答"
+		}
+		// AI 轉真人（含模型拒答）＝AI 沒把握：記一筆待改進，掛在顧客那則訊息上
+		if err := e.Store.AddUnsure(ctx, msgID, conv.IGAccountID, reason); err != nil {
+			log.Printf("automation: record ai_unsure: %v", err)
 		}
 		return e.Inbox.Handoff(ctx, convID, reason)
 	}
@@ -174,10 +208,77 @@ func (e *Engine) Evaluate(ctx context.Context, accountID int64, st Settings, his
 	if err != nil {
 		return Outcome{}, err
 	}
+	if st.AIModeration && d.Abusive {
+		reason := strings.TrimSpace(d.AbuseReason)
+		if reason == "" {
+			reason = "AI 判斷為騷擾或惡意訊息"
+		}
+		return Outcome{Kind: "block", AI: &d, Detail: reason}, nil
+	}
 	if d.Action == "handoff" {
 		return Outcome{Kind: "handoff", AI: &d, Reply: st.HandoffMessage}, nil
 	}
 	return Outcome{Kind: "ai", AI: &d, Reply: d.Reply}, nil
+}
+
+// 降頻：大量訊息不封鎖，改成拉長自動回覆的間隔。等級 N≥1 時每 5×2^(N-1) 分鐘最多回一次，上限 6 小時。
+const (
+	throttleBase     = 5 * time.Minute
+	throttleCap      = 6 * time.Hour
+	maxThrottleLevel = 8 // 5×2^7 分鐘已超過上限
+)
+
+// ThrottleInterval 回降頻等級對應的最短回覆間隔；0 級回 0。
+func ThrottleInterval(level int) time.Duration {
+	if level <= 0 {
+		return 0
+	}
+	d := throttleBase << (level - 1)
+	if d > throttleCap || d <= 0 {
+		return throttleCap
+	}
+	return d
+}
+
+// updateThrottle 依這則顧客訊息更新降頻狀態，回傳目前等級：
+//   - 降頻中且顧客安靜超過目前間隔（與前一則顧客訊息相隔更久）→ 歸零（問題顧客標記保留，留作紀錄）
+//   - 未降頻且 spamWindowSecs 內超過 spamMaxMsgs 則 → 進入降頻（1 級）並自動標成問題顧客（來源 rate）
+func (e *Engine) updateThrottle(ctx context.Context, conv inbox.Conversation, msgID int64, st Settings) (int, error) {
+	level := conv.Contact.ThrottleLevel
+	if level > 0 {
+		gap, ok, err := e.Inbox.InboundGap(ctx, msgID)
+		if err != nil {
+			return level, err
+		}
+		if ok && gap > ThrottleInterval(level) {
+			if err := e.Inbox.SetThrottle(ctx, conv.Contact.ID, 0); err != nil {
+				return level, err
+			}
+			level = 0
+		}
+	}
+	if level > 0 || st.SpamMaxMsgs <= 0 || st.SpamWindowSecs <= 0 {
+		return level, nil
+	}
+	n, err := e.Inbox.RecentInbound(ctx, conv.ID, time.Duration(st.SpamWindowSecs)*time.Second)
+	if err != nil || n <= st.SpamMaxMsgs {
+		return level, err
+	}
+	if err := e.Inbox.SetThrottle(ctx, conv.Contact.ID, 1); err != nil {
+		return level, err
+	}
+	reason := fmt.Sprintf("%s內傳了 %d 則，已降低回覆頻率", windowLabel(st.SpamWindowSecs), n)
+	if _, err := e.Inbox.AutoWatch(ctx, conv.Contact.ID, reason); err != nil {
+		return 1, err
+	}
+	return 1, nil
+}
+
+func windowLabel(secs int) string {
+	if secs%60 == 0 {
+		return fmt.Sprintf("%d 分鐘", secs/60)
+	}
+	return fmt.Sprintf("%d 秒", secs)
 }
 
 func (e *Engine) tagIntent(ctx context.Context, msgID int64, intent string) {

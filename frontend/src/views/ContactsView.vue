@@ -7,6 +7,8 @@ import ContactAvatar from '@/components/ContactAvatar.vue'
 import ContactDrawer from '@/components/ContactDrawer.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import AccountTag from '@/components/AccountTag.vue'
+import RiskTag from '@/components/RiskTag.vue'
+import type { Risk } from '@/api/inbox'
 import { useAccountsStore } from '@/stores/accounts'
 import { shortTime } from '@/utils/time'
 
@@ -15,6 +17,7 @@ const tags = ref<Tag[]>([])
 const loading = ref(true)
 const q = ref('')
 const tag = ref<number | null>(null)
+const risk = ref<Exclude<Risk, ''> | null>(null) // 黑名單／問題顧客篩選
 const sort = ref<'recent' | 'active' | 'new'>('recent')
 const selected = ref<number | null>(null)
 // 帳號篩選（null＝全部帳號）；標籤數也只算該帳號的顧客
@@ -29,6 +32,7 @@ async function load() {
       crmApi.contacts({
         q: q.value.trim() || undefined,
         tag: tag.value ?? undefined,
+        risk: risk.value ?? undefined,
         sort: sort.value,
         account: account.value ?? undefined,
       }),
@@ -41,7 +45,7 @@ async function load() {
   }
 }
 onMounted(load)
-watch([tag, sort, account], load)
+watch([tag, sort, account, risk], load)
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(q, () => {
   clearTimeout(timer)
@@ -51,6 +55,8 @@ watch(q, () => {
 function onUpdated(c: CrmContact) {
   const i = contacts.value.findIndex((x) => x.id === c.id)
   if (i >= 0) contacts.value[i] = { ...contacts.value[i], ...c }
+  // 依標記篩選時，改掉標記的就移出清單
+  if (risk.value && c.risk !== risk.value) contacts.value = contacts.value.filter((x) => x.id !== c.id)
   void crmApi.tags(account.value ?? undefined).then((t) => (tags.value = t))
 }
 </script>
@@ -73,8 +79,15 @@ function onUpdated(c: CrmContact) {
       </el-select>
       <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
     </div>
-    <div v-if="tags.length" class="tag-filter">
-      <button class="chip" :class="{ on: tag == null }" @click="tag = null">全部</button>
+    <div class="tag-filter">
+      <button class="chip" :class="{ on: tag == null && risk == null }" @click="(tag = null), (risk = null)">全部</button>
+      <button class="chip risk blocked" :class="{ on: risk === 'blocked' }" @click="risk = risk === 'blocked' ? null : 'blocked'">
+        <i />黑名單
+      </button>
+      <button class="chip risk watch" :class="{ on: risk === 'watch' }" @click="risk = risk === 'watch' ? null : 'watch'">
+        <i />問題顧客
+      </button>
+      <span v-if="tags.length" class="sep" />
       <button
         v-for="t in tags"
         :key="t.id"
@@ -94,6 +107,7 @@ function onUpdated(c: CrmContact) {
           <div class="line1">
             <span class="name">{{ c.name || c.username || '匿名顧客' }}</span>
             <span v-if="c.username && c.name" class="handle">@{{ c.username }}</span>
+            <RiskTag :risk="c.risk" :reason="c.riskReason" :source="c.riskSource" />
           </div>
           <div class="line2">
             <span v-for="t in c.tags" :key="t.id" class="tag" :style="{ '--c': t.color }">{{ t.name }}</span>
@@ -169,6 +183,17 @@ function onUpdated(c: CrmContact) {
       color: var(--lc-latte);
     }
   }
+}
+.chip.risk.blocked i {
+  background: var(--lc-fail-fg);
+}
+.chip.risk.watch i {
+  background: var(--lc-warn-fg);
+}
+.sep {
+  width: 1px;
+  margin: 4px 2px;
+  background: var(--lc-border);
 }
 .list {
   overflow: hidden;

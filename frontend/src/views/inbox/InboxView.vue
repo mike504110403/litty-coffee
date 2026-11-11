@@ -77,6 +77,7 @@ async function send(text: string) {
         @load-older="store.loadOlder(active.id)"
         @set-handler="(h) => store.patch(active!.id, { handler: h })"
         @set-status="(s) => store.patch(active!.id, { status: s })"
+        @risk-changed="store.applyRisk"
         @open-contact="auth.can('contacts') && (contactId = active!.contact.id)"
       />
       <div v-else class="placeholder">

@@ -6,6 +6,10 @@ import { ChatDotRound, Close } from '@element-plus/icons-vue'
 import { crmApi, type ContactDetail, type Tag } from '@/api/crm'
 import { intentLabels } from '@/api/automation'
 import ContactAvatar from '@/components/ContactAvatar.vue'
+import RiskTag from '@/components/RiskTag.vue'
+import RiskMenu from '@/components/RiskMenu.vue'
+import { riskSourceLabels, throttleMinutes } from '@/api/inbox'
+import type { RiskResult } from '@/api/flags'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { fullDate } from '@/utils/format'
 import { shortTime } from '@/utils/time'
@@ -72,6 +76,13 @@ async function save(body: { note?: string; tagIds?: number[] }) {
   }
 }
 
+function onRisk(r: RiskResult) {
+  if (!detail.value) return
+  const { risk, riskReason, riskSource, riskAt, riskBy } = r
+  detail.value = { ...detail.value, risk, riskReason, riskSource, riskAt, riskBy }
+  emit('updated', detail.value)
+}
+
 function goChat() {
   if (detail.value?.conversationId) router.push({ name: 'inbox', params: { id: detail.value.conversationId } })
   emit('close')
@@ -99,6 +110,26 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
             <div v-if="detail.username" class="handle">@{{ detail.username }}</div>
           </div>
           <el-button v-if="detail.conversationId" type="primary" round :icon="ChatDotRound" @click="goChat">對話</el-button>
+        </div>
+
+        <div class="risk-row">
+          <div class="risk-info">
+            <RiskTag v-if="detail.risk" :risk="detail.risk" />
+            <span v-else class="muted">一般顧客</span>
+            <div v-if="detail.riskAt" class="risk-meta">
+              <template v-if="detail.risk">
+                {{ riskSourceLabels[detail.riskSource] }}<template v-if="detail.riskBy">（{{ detail.riskBy }}）</template>
+                · {{ shortTime(detail.riskAt) }}<template v-if="detail.riskReason"> · {{ detail.riskReason }}</template>
+              </template>
+              <template v-else-if="detail.riskBy">
+                {{ detail.riskBy }} 於 {{ shortTime(detail.riskAt) }} 解除標記<template v-if="detail.riskReason">（{{ detail.riskReason }}）</template>
+              </template>
+            </div>
+          </div>
+          <RiskMenu :contact-id="detail.id" :risk="detail.risk" size="small" @changed="onRisk" />
+        </div>
+        <div v-if="detail.throttleLevel > 0" class="throttle-note">
+          短時間傳了很多訊息：自動回覆已降為每 {{ throttleMinutes(detail.throttleLevel) }} 分鐘最多一次，顧客安靜一段時間後恢復
         </div>
 
         <div class="stats">
@@ -209,6 +240,34 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
     color: var(--lc-muted);
     font-size: 13px;
   }
+}
+.risk-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--lc-bg-soft);
+  border: 1px solid var(--lc-border);
+}
+.throttle-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--lc-warn-fg);
+  line-height: 1.5;
+}
+.risk-info {
+  min-width: 0;
+  font-size: 13px;
+}
+.risk-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--lc-muted);
+  line-height: 1.5;
+  word-break: break-word;
 }
 .stats {
   display: grid;

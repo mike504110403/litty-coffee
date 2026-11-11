@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { inboxApi, type Conversation, type Message } from '@/api/inbox'
+import type { RiskResult } from '@/api/flags'
 
 const sortConvs = (a: Conversation, b: Conversation) =>
   (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? '')
@@ -98,6 +99,14 @@ export const useInboxStore = defineStore('inbox', () => {
     upsertConversation(await inboxApi.patch(convId, body))
   }
 
+  // 顧客標記改了：先就地更新（SSE 的 conversation.updated 也會帶來同樣的值）
+  function applyRisk(r: RiskResult) {
+    for (const c of conversations.value) {
+      if (c.contact.id !== r.id) continue
+      c.contact = { ...c.contact, risk: r.risk, riskReason: r.riskReason, riskSource: r.riskSource, riskAt: r.riskAt }
+    }
+  }
+
   // 轉真人通知：AppLayout 註冊處理函式（跳通知、點了打開對話）
   type HandoffHandler = (e: { conversation: Conversation; reason: string }) => void
   const handoffHandlers = new Set<HandoffHandler>()
@@ -150,6 +159,6 @@ export const useInboxStore = defineStore('inbox', () => {
 
   return {
     conversations, messages, hasMore, activeId, active, loading, connected, totalUnread, accountFilter,
-    fetchConversations, setAccountFilter, open, loadOlder, markRead, send, patch, connect, disconnect, onHandoff,
+    fetchConversations, setAccountFilter, open, loadOlder, markRead, send, patch, applyRisk, connect, disconnect, onHandoff,
   }
 })

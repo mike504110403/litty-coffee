@@ -10,13 +10,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
+	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 )
 
 func (s *Server) crmRoutes(r chi.Router) {
 	r.Get("/contacts", s.listContacts)
 	r.Get("/contacts/{id}", s.getContact)
-	r.Patch("/contacts/{id}", s.patchContact)
+	// PATCH /contacts/{id} 在 router.go：顧客或收件匣權限都能改標記
 
 	r.Get("/tags", s.listTags)
 	r.Post("/tags", s.createTag)
@@ -44,7 +46,12 @@ func (s *Server) listContacts(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	tagID, _ := strconv.ParseInt(q.Get("tag"), 10, 64)
-	list, err := s.CRM.List(r.Context(), crm.ListFilter{Q: q.Get("q"), TagID: tagID, Sort: q.Get("sort"), Accounts: accounts})
+	risk := q.Get("risk")
+	if risk != "" && risk != inbox.RiskBlocked && risk != inbox.RiskWatch {
+		writeErr(w, http.StatusBadRequest, "risk 必須是 blocked 或 watch")
+		return
+	}
+	list, err := s.CRM.List(r.Context(), crm.ListFilter{Q: q.Get("q"), TagID: tagID, Sort: q.Get("sort"), Accounts: accounts, Risk: risk})
 	if err != nil {
 		s.crmErr(w, err)
 		return
@@ -82,19 +89,54 @@ func (s *Server) patchContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Note   *string `json:"note"`
-		TagIDs []int64 `json:"tagIds"` // 省略＝不動；[]＝清空
+		Note       *string `json:"note"`
+		TagIDs     []int64 `json:"tagIds"` // 省略＝不動；[]＝清空
+		Risk       *string `json:"risk"`   // blocked | watch | ''（解除）；省略＝不動
+		RiskReason string  `json:"riskReason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	u := currentUser(r)
+	// 路由放行「顧客」或「收件匣」；只有收件匣權限的人只能改標記
+	if (in.Note != nil || in.TagIDs != nil) && !u.Can(auth.PermContacts) {
+		writeErr(w, http.StatusForbidden, "沒有「顧客」的權限")
 		return
 	}
 	if _, err := s.scopedContact(r, id); err != nil {
 		s.crmErr(w, err)
 		return
 	}
-	if err := s.CRM.Update(r.Context(), id, in.Note, in.TagIDs); err != nil {
-		s.crmErr(w, err)
+	if in.Note != nil || in.TagIDs != nil {
+		if err := s.CRM.Update(r.Context(), id, in.Note, in.TagIDs); err != nil {
+			s.crmErr(w, err)
+			return
+		}
+	}
+	if in.Risk != nil {
+		err := s.Inbox.SetRisk(r.Context(), id, *in.Risk, in.RiskReason, u.ID)
+		if errors.Is(err, inbox.ErrBadRisk) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, inbox.ErrNotFound) {
+			err = crm.ErrNotFound
+		}
+		if err != nil {
+			s.crmErr(w, err)
+			return
+		}
+	}
+	if !u.Can(auth.PermContacts) {
+		// 只有收件匣權限：只回標記，不回備註、標籤等顧客資料
+		d, err := s.CRM.Get(r.Context(), id)
+		if err != nil {
+			s.crmErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": d.ID, "risk": d.Risk, "riskReason": d.RiskReason,
+			"riskSource": d.RiskSource, "riskAt": d.RiskAt, "riskBy": d.RiskBy})
 		return
 	}
 	s.getContact(w, r)

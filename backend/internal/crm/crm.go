@@ -35,6 +35,14 @@ type Contact struct {
 	InboundCount   int       `json:"inboundCount"`
 	LastIntent     string    `json:"lastIntent"`
 	Tags           []Tag     `json:"tags"`
+	// 標記：'' 一般｜watch 問題顧客｜blocked 黑名單；解除後 risk='' 但 riskAt／riskBy 保留最後是誰解除
+	Risk       string     `json:"risk"`
+	RiskReason string     `json:"riskReason"`
+	RiskSource string     `json:"riskSource"` // manual | rate | ai
+	RiskAt     *time.Time `json:"riskAt"`
+	RiskBy     string     `json:"riskBy"` // 操作的管理員；自動標記為空
+	// 降頻等級（短時間大量訊息）：0＝正常
+	ThrottleLevel int `json:"throttleLevel"`
 }
 
 type IntentCount struct {
@@ -60,13 +68,16 @@ SELECT ct.id, ct.ig_account_id, ct.igsid, ct.username, ct.name, ct.avatar_url, c
                  WHERE m.conversation_id = cv.id AND m.direction = 'in' AND m.meta ? 'intent'
                  ORDER BY m.created_at DESC LIMIT 1), ''),
        COALESCE((SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name)
-                 FROM contact_tags x JOIN tags t ON t.id = x.tag_id WHERE x.contact_id = ct.id), '[]')
-FROM contacts ct LEFT JOIN conversations cv ON cv.contact_id = ct.id`
+                 FROM contact_tags x JOIN tags t ON t.id = x.tag_id WHERE x.contact_id = ct.id), '[]'),
+       ct.risk, ct.risk_reason, ct.risk_source, ct.risk_at, COALESCE(NULLIF(ra.display_name, ''), ra.username, ''),
+       ct.throttle_level
+FROM contacts ct LEFT JOIN conversations cv ON cv.contact_id = ct.id LEFT JOIN admin_users ra ON ra.id = ct.risk_by_admin_id`
 
 func scanContact(row pgx.Row) (Contact, error) {
 	var c Contact
 	err := row.Scan(&c.ID, &c.IGAccountID, &c.IGSID, &c.Username, &c.Name, &c.AvatarURL, &c.Note, &c.FirstSeenAt, &c.LastSeenAt,
-		&c.ConversationID, &c.Handler, &c.InboundCount, &c.LastIntent, &c.Tags)
+		&c.ConversationID, &c.Handler, &c.InboundCount, &c.LastIntent, &c.Tags,
+		&c.Risk, &c.RiskReason, &c.RiskSource, &c.RiskAt, &c.RiskBy, &c.ThrottleLevel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -78,6 +89,7 @@ type ListFilter struct {
 	TagID    int64
 	Sort     string  // recent | active | new
 	Accounts []int64 // 只列這些 IG 帳號的顧客；nil＝全部
+	Risk     string  // blocked | watch | ''（不篩）
 }
 
 func (s *Service) List(ctx context.Context, f ListFilter) ([]Contact, error) {
@@ -92,7 +104,8 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Contact, error) {
 WHERE ($1 = '' OR ct.username ILIKE '%' || $1 || '%' OR ct.name ILIKE '%' || $1 || '%' OR ct.note ILIKE '%' || $1 || '%')
   AND ($2 = 0 OR EXISTS (SELECT 1 FROM contact_tags x WHERE x.contact_id = ct.id AND x.tag_id = $2))
   AND ($3::bigint[] IS NULL OR ct.ig_account_id = ANY($3))
-ORDER BY `+order+` LIMIT 500`, f.Q, f.TagID, f.Accounts)
+  AND ($4 = '' OR ct.risk = $4)
+ORDER BY `+order+` LIMIT 500`, f.Q, f.TagID, f.Accounts, f.Risk)
 	if err != nil {
 		return nil, err
 	}

@@ -10,13 +10,15 @@ import (
 
 const convSelect = `
 SELECT c.id, c.status, c.handler, c.unread_count, c.last_message_at, c.last_inbound_at, c.last_message_text, c.contact_read_at,
-       ct.ig_account_id, ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url
+       ct.ig_account_id, ct.id, ct.igsid, ct.username, ct.name, ct.avatar_url,
+       ct.risk, ct.risk_reason, ct.risk_source, ct.risk_at, ct.throttle_level
 FROM conversations c JOIN contacts ct ON ct.id = c.contact_id`
 
 func scanConv(row pgx.Row) (Conversation, error) {
 	var c Conversation
 	err := row.Scan(&c.ID, &c.Status, &c.Handler, &c.UnreadCount, &c.LastMessageAt, &c.LastInboundAt, &c.LastMessageText, &c.ContactReadAt,
-		&c.IGAccountID, &c.Contact.ID, &c.Contact.IGSID, &c.Contact.Username, &c.Contact.Name, &c.Contact.AvatarURL)
+		&c.IGAccountID, &c.Contact.ID, &c.Contact.IGSID, &c.Contact.Username, &c.Contact.Name, &c.Contact.AvatarURL,
+		&c.Contact.Risk, &c.Contact.RiskReason, &c.Contact.RiskSource, &c.Contact.RiskAt, &c.Contact.ThrottleLevel)
 	if c.LastInboundAt != nil {
 		t := c.LastInboundAt.Add(ReplyWindow)
 		c.WindowExpiresAt = &t
@@ -129,8 +131,13 @@ WHERE m.media_file = $1 LIMIT 1`, name).Scan(&id)
 	return id, err
 }
 
+// GetMessage 讀單則訊息；不存在回 ErrNotFound。
 func (s *Service) GetMessage(ctx context.Context, id int64) (Message, error) {
-	return scanMsg(s.DB.QueryRow(ctx, `SELECT `+msgCols+` FROM messages m `+msgJoin+` WHERE m.id = $1`, id))
+	m, err := scanMsg(s.DB.QueryRow(ctx, `SELECT `+msgCols+` FROM messages m `+msgJoin+` WHERE m.id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
 }
 
 func (s *Service) MarkRead(ctx context.Context, id int64) error {
@@ -152,6 +159,9 @@ func (s *Service) Handoff(ctx context.Context, id int64, reason string) error {
 	c, err := s.GetConversation(ctx, id)
 	if err != nil {
 		return err
+	}
+	if c.Contact.Risk == RiskBlocked {
+		return nil // 黑名單顧客不發轉真人通知
 	}
 	s.publishHandoff(c, reason)
 	return nil

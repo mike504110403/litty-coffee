@@ -5,6 +5,7 @@ import { contactLabel, type Conversation } from '@/api/inbox'
 import ContactAvatar from '@/components/ContactAvatar.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import AccountTag from '@/components/AccountTag.vue'
+import RiskTag from '@/components/RiskTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { shortTime } from '@/utils/time'
 
@@ -80,6 +81,7 @@ const count = (k: Tab) =>
         <div class="body">
           <div class="row1">
             <span class="name">{{ contactLabel(c.contact) }}</span>
+            <RiskTag :risk="c.contact.risk" :reason="c.contact.riskReason" :source="c.contact.riskSource" />
             <span class="time">{{ shortTime(c.lastMessageAt) }}</span>
           </div>
           <div class="row2">

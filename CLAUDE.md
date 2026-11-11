@@ -43,10 +43,20 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 
 ## 自動回覆
 
-- 流程：顧客訊息入庫 → 等合併秒數（設定頁可調）→ 只處理該對話最新一則 → handler=human 則跳過 → 關鍵字規則（priority 小的先）→ AI（`internal/automation/ai.go`，結構化輸出 reply/handoff＋intent）→ 送出或轉真人
+- 流程：顧客訊息入庫 → 等合併秒數（設定頁可調）→ 黑名單則跳過 → handler=human 則跳過 → 降頻判斷 → 只處理該對話最新一則 → 降頻間隔內則跳過 → 關鍵字規則（priority 小的先）→ AI（`internal/automation/ai.go`，結構化輸出 reply/handoff＋intent＋abusive/abuseReason）→ 送出、轉真人或列入黑名單
 - 依帳號：設定、知識庫、規則都有 `ig_account_id`；引擎用「對話所屬帳號」的那一份。`ig_account_id IS NULL` 的是範本，帳號第一次用到時（`automation.Store.EnsureAccount`）從範本複製一份。自動回覆頁上方選帳號，沙盒也用選的帳號；API 除 `/automation/status` 外都要帶 `?account=`
 - AI：`ANTHROPIC_API_KEY`、`AI_MODEL`（預設 claude-opus-5-5）、`AI_EFFORT`（預設 low）；開啟 server-side refusal fallback（`fallbacks: default`）
 - 意圖寫進顧客訊息的 `messages.meta.intent`，分析頁用
+
+## 黑名單與標記
+
+- 顧客標記 `contacts.risk`：`blocked` 黑名單｜`watch` 問題顧客｜`''` 一般；`risk_source`：`manual` 管理員｜`rate` 大量訊息｜`ai` AI 判斷騷擾；`risk_reason`、`risk_at`、`risk_by_admin_id`。解除＝risk 清空但保留是誰、何時解除（`internal/inbox/risk.go`）
+- 黑名單：訊息照收、留在收件匣（列表與對話頭有標籤、對話上方橫幅），但不跑規則與 AI、不推 `handoff.requested`（`inbox.Handoff` 也擋）；管理員仍可手動回覆或解除。只有 AI 判斷騷擾（`ai_moderation` 開）或手動才會進黑名單
+- AI 判斷騷擾：設定開啟時 decision schema 多 `abusive`、`abuseReason`，system prompt 說明範圍（騷擾、辱罵、性內容、詐騙、打聽他人個資；一般客訴不算）。abusive=true → 列入黑名單、不回、不轉真人；模型拒答不封鎖（記 ai_unsure、照舊轉真人）。沙盒顯示判斷（`kind=block`）但不寫 DB
+- 大量訊息＝降頻，不封鎖：`spam_window_secs` 內顧客訊息超過 `spam_max_msgs`（每帳號設定，預設 300 秒／10 則，0＝關）→ 標 `watch`（source=rate，只覆蓋一般或先前 rate 標的）＋ `contacts.throttle_level`=1。降頻中每 5×2^(N-1) 分鐘最多自動回一次（上限 6 小時），間隔內只收不回；每回一次升一級；某則顧客訊息與前一則相隔超過目前間隔＝顧客安靜過 → 歸零（watch 標記保留作紀錄）。降頻中 AI 收到「降頻模式」：一句話答主要問題、委婉說店員稍後回覆、不得有敵意；該轉真人照轉、照通知。上次自動回覆時間由 messages（ai／bot）推得
+- 標記 API：`PATCH /api/contacts/{id}` 帶 `risk`＋`riskReason`，顧客或收件匣權限皆可（只有收件匣權限者不能改備註／標籤，回應只含標記欄位）；顧客清單 `?risk=blocked|watch`；變更推 `conversation.updated`（contact 帶 risk／riskReason／riskSource／riskAt／throttleLevel）
+- 待改進問答 `message_reviews`：`ai_wrong`（收件匣在 AI／規則回覆上按「回答有誤」，`POST /api/messages/{id}/reviews`，收件匣權限，note 必填，未處理前同一則不重複）、`ai_unsure`（AI 轉真人或拒答時自動記，掛顧客那則，note＝AI 理由）。`GET /api/reviews?account=&kind=&status=open|resolved`、`GET /api/reviews/open-count`、`POST /api/reviews/{id}/resolve`（自動回覆權限）；清單帶顧客問題（ai_wrong＝回覆前最近一則顧客訊息）與回覆。可見帳號規則同其他（清單 403、單筆 404）
+- 後台：收件匣標籤／「標記」下拉／橫幅／「回答有誤」；自動回覆頁「待改進」分頁與「AI 設定」的門檻與騷擾開關；顧客頁「黑名單」「問題顧客」篩選與抽屜內標記；總覽「待改進問答 N 則」（自動回覆權限）
 
 ## 顧客與分析
 
@@ -99,6 +109,10 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 斷開連線不會呼叫 DELETE subscribed_apps（webhook 改由「未連結的帳號」拒收）
 - 標籤是全店共用的；只看部分帳號的人仍能新增／改名／刪除標籤
 - 管理員重設密碼不會撤銷對方既有 session
+- AI 騷擾判斷（abusive）與降頻模式的 prompt 未以真模型實測；誤判時只能人工解除
+- ai_unsure 會連同「規則性轉真人」（訂位確認、客訴等 AI 依規定轉的）一起記，待改進清單可能偏多
+- 降頻歸零以「該則與前一則顧客訊息的間隔」判斷，依賴各則的處理順序（同對話有鎖、合併等待相同，正常情況依序）；降頻自動加的問題顧客標記不會自動解除
+- 待改進只帶回覆前「最近一則」顧客訊息，合併的連發訊息只看最後一則
 
 ## IG API 限制（設計時以此為準）
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 )
 
 // 功能權限鍵。後端是唯一來源；前端由 /auth/me 取得，管理員頁的勾選清單也照這份。
@@ -76,6 +77,28 @@ func RequirePerm(perm string) func(http.Handler) http.Handler {
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireAnyPerm 放行有其中任一功能權限的登入者（須掛在 Middleware 之後）。
+func RequireAnyPerm(perms ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, ok := CurrentUser(r.Context())
+			if !ok {
+				writeAuthErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			labels := make([]string, 0, len(perms))
+			for _, p := range perms {
+				if u.Can(p) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				labels = append(labels, "「"+permLabels[p]+"」")
+			}
+			writeAuthErr(w, http.StatusForbidden, "沒有"+strings.Join(labels, "或")+"的權限")
 		})
 	}
 }

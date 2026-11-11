@@ -63,6 +63,13 @@ type Contact struct {
 	Username  string `json:"username"`
 	Name      string `json:"name"`
 	AvatarURL string `json:"avatarUrl"`
+	// 標記：'' 一般｜watch 問題顧客｜blocked 黑名單（AI 不回、不發轉真人通知）
+	Risk       string     `json:"risk"`
+	RiskReason string     `json:"riskReason"`
+	RiskSource string     `json:"riskSource"` // manual | rate | ai
+	RiskAt     *time.Time `json:"riskAt"`
+	// 降頻等級：0＝正常；N≥1＝自動回覆每 5×2^(N-1) 分鐘最多一次（短時間大量訊息時啟動）
+	ThrottleLevel int `json:"throttleLevel"`
 }
 
 type Conversation struct {
