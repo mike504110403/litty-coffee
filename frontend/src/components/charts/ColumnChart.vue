@@ -28,9 +28,11 @@ watch(
   () => props.categories.join('|') + '#' + props.series.map((x) => x.values.join(',')).join('|'),
   () => (page.value = 1),
 )
+// 表格一律倒序（最新／最後的在最上面）；圖表維持由左到右的時間順序
 const pageRows = computed(() => {
   const start = (page.value - 1) * props.pageSize
-  return props.categories.slice(start, start + props.pageSize).map((c, k) => ({ c, i: start + k }))
+  const rows = props.categories.map((c, i) => ({ c, i })).reverse()
+  return rows.slice(start, start + props.pageSize)
 })
 
 // 每根柱子只畫大於 0 的段（讓 :last-child 一定是最上面那段）

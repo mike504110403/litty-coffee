@@ -92,7 +92,8 @@ const byDay = computed(() => {
 // 清單：依日期分組
 const agenda = computed(() => {
   const groups: { label: string; items: Post[] }[] = []
-  const scheduled = posts.value.filter((p) => p.scheduledAt).sort((a, b) => a.scheduledAt!.localeCompare(b.scheduledAt!))
+  // 倒序：最新（最晚）的日期在最上面
+  const scheduled = posts.value.filter((p) => p.scheduledAt).sort((a, b) => b.scheduledAt!.localeCompare(a.scheduledAt!))
   for (const p of scheduled) {
     const d = new Date(p.scheduledAt!)
     const label = `${d.getMonth() + 1} 月 ${d.getDate()} 日（${'日一二三四五六'[d.getDay()]}）${isToday(d) ? '· 今天' : ''}`
