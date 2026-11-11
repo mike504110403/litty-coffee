@@ -18,7 +18,11 @@ func TestSendAsAdminRecordsSender(t *testing.T) {
 VALUES ('sentby-test-mei', 'x', '小美') RETURNING id`).Scan(&adminID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = s.DB.Exec(context.Background(), `DELETE FROM admin_users WHERE id = $1`, adminID) })
+	t.Cleanup(func() {
+		// 先解除訊息的參照，否則外鍵擋住刪除，下次跑會撞名
+		_, _ = s.DB.Exec(context.Background(), `UPDATE messages SET sent_by_admin_id = NULL WHERE sent_by_admin_id = $1`, adminID)
+		_, _ = s.DB.Exec(context.Background(), `DELETE FROM admin_users WHERE id = $1`, adminID)
+	})
 
 	if err := s.EnqueueWebhook(ctx, payload(t, "u1", "acct", "m1", "hi", false, time.Now())); err != nil {
 		t.Fatal(err)

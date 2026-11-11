@@ -108,6 +108,16 @@ func (s *Service) publishMessageUpdated(m Message) {
 	s.Hub.Publish(realtime.Event{Type: "message.updated", Data: m, AccountID: m.IGAccountID})
 }
 
+// HandoffEvent 是轉真人通知的內容。
+type HandoffEvent struct {
+	Conversation Conversation `json:"conversation"`
+	Reason       string       `json:"reason"`
+}
+
+func (s *Service) publishHandoff(c Conversation, reason string) {
+	s.Hub.Publish(realtime.Event{Type: "handoff.requested", Data: HandoffEvent{Conversation: c, Reason: reason}, AccountID: c.IGAccountID})
+}
+
 func (s *Service) publishConversation(c Conversation) {
 	s.Hub.Publish(realtime.Event{Type: "conversation.updated", Data: c, AccountID: c.IGAccountID})
 }

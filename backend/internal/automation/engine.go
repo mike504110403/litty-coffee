@@ -105,7 +105,7 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 			e.tagMeta(ctx, m.ID, map[string]any{"ruleId": out.Rule.ID, "ruleName": out.Rule.Name})
 		}
 		if out.Rule.Handoff {
-			return e.Inbox.SetHandler(ctx, convID, "human")
+			return e.Inbox.Handoff(ctx, convID, "命中關鍵字規則「"+out.Rule.Name+"」")
 		}
 	case "ai":
 		m, err := e.Inbox.Send(ctx, convID, out.Reply, "ai")
@@ -119,7 +119,14 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 				return err
 			}
 		}
-		return e.Inbox.SetHandler(ctx, convID, "human")
+		reason := out.Detail
+		if out.AI != nil && out.AI.Reason != "" {
+			reason = out.AI.Reason
+		}
+		if reason == "" {
+			reason = "AI 沒把握回答"
+		}
+		return e.Inbox.Handoff(ctx, convID, reason)
 	}
 	return nil
 }

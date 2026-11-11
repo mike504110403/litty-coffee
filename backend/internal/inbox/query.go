@@ -144,6 +144,19 @@ func (s *Service) SetHandler(ctx context.Context, id int64, handler string) erro
 	return s.updateConv(ctx, id, `UPDATE conversations SET handler = $2 WHERE id = $1`, handler)
 }
 
+// Handoff 自動回覆轉真人：切成 handler=human，並推 handoff.requested 給所有看得到這個帳號的已登入管理員。
+func (s *Service) Handoff(ctx context.Context, id int64, reason string) error {
+	if err := s.SetHandler(ctx, id, "human"); err != nil {
+		return err
+	}
+	c, err := s.GetConversation(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.publishHandoff(c, reason)
+	return nil
+}
+
 func (s *Service) SetStatus(ctx context.Context, id int64, status string) error {
 	if status != "open" && status != "closed" {
 		return errors.New("status must be open or closed")

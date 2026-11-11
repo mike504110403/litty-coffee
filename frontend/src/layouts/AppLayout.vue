@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
+import { ElNotification } from 'element-plus'
+import { contactLabel, type Conversation } from '@/api/inbox'
 import { navItems } from '@/router/nav'
 import { useAuthStore } from '@/stores/auth'
 import { useInboxStore } from '@/stores/inbox'
@@ -11,12 +13,45 @@ const router = useRouter()
 const auth = useAuthStore()
 const inbox = useInboxStore()
 
+// 自動回覆轉真人：所有登入中、看得到這個帳號的管理員都會收到
+let offHandoff: (() => void) | null = null
+function notifyHandoff({ conversation: c, reason }: { conversation: Conversation; reason: string }) {
+  const who = contactLabel(c.contact)
+  const open = () => router.push({ name: 'inbox', params: { id: c.id } })
+  const n = ElNotification({
+    title: `需要真人回覆：${who}`,
+    message: reason || '自動回覆已轉給真人',
+    type: 'warning',
+    duration: 0, // 不自動消失，處理了才關
+    position: 'bottom-right',
+    onClick: () => {
+      open()
+      n.close()
+    },
+  })
+  // 分頁在背景時再補一則系統通知（使用者有允許才會跳）
+  if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted') {
+    const sys = new Notification(`需要真人回覆：${who}`, { body: reason, tag: `handoff-${c.id}` })
+    sys.onclick = () => {
+      window.focus()
+      open()
+      sys.close()
+    }
+  }
+}
+
 onMounted(() => {
   if (!auth.can('inbox')) return // 沒收件匣權限就不連即時推送（後端會 403）
   inbox.connect()
+  offHandoff = inbox.onHandoff(notifyHandoff)
   if (!inbox.conversations.length) void inbox.fetchConversations()
+  // 第一次登入時詢問是否允許系統通知（拒絕也不影響頁內通知）
+  if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission()
 })
-onBeforeUnmount(() => inbox.disconnect())
+onBeforeUnmount(() => {
+  offHandoff?.()
+  inbox.disconnect()
+})
 
 const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 

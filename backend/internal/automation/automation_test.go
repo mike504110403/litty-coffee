@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,10 +178,27 @@ func TestEngineFlow(t *testing.T) {
 		t.Fatalf("stale message should be skipped: err=%v calls=%d", err, ai.calls)
 	}
 
-	// 4. 規則要求轉真人 → handler=human，之後 AI 不再回
+	// 4. 規則要求轉真人 → handler=human，之後 AI 不再回；並推 handoff.requested 給已登入的管理員
+	events, unsub := e.Inbox.Hub.Subscribe()
+	defer unsub()
+	handoffReason := func() string {
+		for {
+			select {
+			case ev := <-events:
+				if ev.Type == "handoff.requested" {
+					return ev.Data.(inbox.HandoffEvent).Reason
+				}
+			default:
+				return ""
+			}
+		}
+	}
 	conv, m = customerSays(t, e, "u1", "m3", "我要退錢")
 	if err := e.handle(ctx, conv, m.ID, st); err != nil {
 		t.Fatal(err)
+	}
+	if r := handoffReason(); !strings.Contains(r, "客訴") {
+		t.Fatalf("rule handoff event reason: %q", r)
 	}
 	c, _ := e.Inbox.GetConversation(ctx, conv)
 	if c.Handler != "human" {
@@ -201,6 +219,9 @@ func TestEngineFlow(t *testing.T) {
 	c, _ = e.Inbox.GetConversation(ctx, conv)
 	if out := lastOut(t, e, conv); out.Text != "請稍等店員" || c.Handler != "human" {
 		t.Fatalf("ai handoff: %+v handler=%s", out, c.Handler)
+	}
+	if r := handoffReason(); r != "要確認空位" {
+		t.Fatalf("ai handoff event reason: %q", r)
 	}
 }
 

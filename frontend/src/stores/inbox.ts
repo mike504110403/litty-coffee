@@ -98,6 +98,14 @@ export const useInboxStore = defineStore('inbox', () => {
     upsertConversation(await inboxApi.patch(convId, body))
   }
 
+  // 轉真人通知：AppLayout 註冊處理函式（跳通知、點了打開對話）
+  type HandoffHandler = (e: { conversation: Conversation; reason: string }) => void
+  const handoffHandlers = new Set<HandoffHandler>()
+  function onHandoff(fn: HandoffHandler) {
+    handoffHandlers.add(fn)
+    return () => handoffHandlers.delete(fn)
+  }
+
   function connect() {
     if (es) return
     es = new EventSource('/api/inbox/stream', { withCredentials: true })
@@ -122,6 +130,11 @@ export const useInboxStore = defineStore('inbox', () => {
     es.addEventListener('message.updated', (e) => {
       replaceMessage(JSON.parse((e as MessageEvent).data) as Message)
     })
+    es.addEventListener('handoff.requested', (e) => {
+      const ev = JSON.parse((e as MessageEvent).data) as { conversation: Conversation; reason: string }
+      upsertConversation(ev.conversation)
+      handoffHandlers.forEach((fn) => fn(ev))
+    })
     es.addEventListener('conversation.updated', (e) => {
       const c = JSON.parse((e as MessageEvent).data) as Conversation
       if (c.id === activeId.value && document.visibilityState === 'visible') c.unreadCount = 0
@@ -137,6 +150,6 @@ export const useInboxStore = defineStore('inbox', () => {
 
   return {
     conversations, messages, hasMore, activeId, active, loading, connected, totalUnread, accountFilter,
-    fetchConversations, setAccountFilter, open, loadOlder, markRead, send, patch, connect, disconnect,
+    fetchConversations, setAccountFilter, open, loadOlder, markRead, send, patch, connect, disconnect, onHandoff,
   }
 })
