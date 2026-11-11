@@ -62,6 +62,13 @@ export interface Message {
   createdAt: string
 }
 
+// AI 建議回覆：草稿只放進輸入框，後端不會送出任何訊息
+export interface Suggestion {
+  text: string
+  basis: string[] // 用到的知識庫條目標題
+  warning?: string // 知識庫沒涵蓋或需店員判斷的地方
+}
+
 export const inboxApi = {
   list: (params: { status?: string; q?: string; account?: number } = {}) =>
     http.get<Conversation[]>('/conversations', { params }).then((r) => r.data),
@@ -72,6 +79,16 @@ export const inboxApi = {
   messages: (id: number, before?: number) =>
     http.get<Message[]>(`/conversations/${id}/messages`, { params: { before, limit: 50 } }).then((r) => r.data),
   send: (id: number, text: string) => http.post<Message>(`/conversations/${id}/messages`, { text }).then((r) => r.data),
+  // 收件匣用的 AI 狀態（只需收件匣權限）：沒設 Claude key 就不顯示「AI 建議」
+  aiStatus: () => http.get<{ configured: boolean }>('/inbox/ai').then((r) => r.data),
+  // silent＝失敗（含 429、503）不跳錯誤提示、回 null；自動擬稿用，免得翻對話時一直跳提示
+  suggest: (id: number, silent = false) =>
+    http
+      .post<Suggestion>(`/conversations/${id}/suggest`, undefined, {
+        timeout: 70_000,
+        ...(silent ? { validateStatus: () => true } : {}),
+      })
+      .then((r) => (r.status >= 200 && r.status < 300 ? r.data : null)),
 }
 
 export const devApi = {

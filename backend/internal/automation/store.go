@@ -14,6 +14,11 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// DefaultDigestTime 是每日摘要的預設產生時間（店家時區）。
+const DefaultDigestTime = "09:00"
+
+var digestTimeRe = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
+
 type Rule struct {
 	ID        int64      `json:"id"`
 	Name      string     `json:"name"`
@@ -45,6 +50,10 @@ type Settings struct {
 	SpamMaxMsgs    int  `json:"spamMaxMsgs"`
 	SpamWindowSecs int  `json:"spamWindowSecs"`
 	AIModeration   bool `json:"aiModeration"` // AI 回覆時順便判斷是否騷擾／惡意，是就自動列入黑名單
+	// AutoReplyEnabled 是自動回覆總開關：關閉時顧客訊息只收不回（不跑規則、AI、降頻、轉真人通知）
+	AutoReplyEnabled bool `json:"autoReplyEnabled"`
+	// DigestTime 是每日摘要的產生時間（店家時區 HH:MM），產生前一天的摘要
+	DigestTime string `json:"digestTime"`
 	// Throttled 不存 DB：引擎在顧客降頻中時設成 true，請 AI 回得簡短、委婉
 	Throttled bool `json:"-"`
 }
@@ -79,8 +88,10 @@ func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `
-INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation, ig_account_id)
-SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation, $1
+INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
+  auto_reply_enabled, digest_time, ig_account_id)
+SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
+  auto_reply_enabled, digest_time, $1
 FROM automation_settings WHERE ig_account_id IS NULL
 ON CONFLICT (ig_account_id) DO NOTHING`, accountID)
 	if err != nil {
@@ -277,9 +288,11 @@ func (s *Store) GetSettings(ctx context.Context, accountID int64) (Settings, err
 		return st, err
 	}
 	err := s.DB.QueryRow(ctx, `
-SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation
+SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
+  auto_reply_enabled, digest_time
 FROM automation_settings WHERE ig_account_id=$1`,
-		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration)
+		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration,
+		&st.AutoReplyEnabled, &st.DigestTime)
 	return st, err
 }
 
@@ -293,13 +306,21 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	if st.SpamMaxMsgs > 0 && (st.SpamWindowSecs < 60 || st.SpamWindowSecs > 24*3600) {
 		return st, errors.New("大量訊息的時間範圍需在 1～1440 分鐘")
 	}
+	st.DigestTime = strings.TrimSpace(st.DigestTime)
+	if st.DigestTime == "" {
+		st.DigestTime = DefaultDigestTime
+	}
+	if !digestTimeRe.MatchString(st.DigestTime) {
+		return st, errors.New("每日摘要時間格式應為 HH:MM（00:00～23:59）")
+	}
 	if err := s.EnsureAccount(ctx, accountID); err != nil {
 		return st, err
 	}
 	st.Persona, st.HandoffMessage = strings.TrimSpace(st.Persona), strings.TrimSpace(st.HandoffMessage)
 	_, err := s.DB.Exec(ctx, `
 UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4,
-  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, updated_at=now() WHERE ig_account_id=$5`,
-		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration)
+  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, updated_at=now() WHERE ig_account_id=$5`,
+		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration,
+		st.AutoReplyEnabled, st.DigestTime)
 	return st, err
 }

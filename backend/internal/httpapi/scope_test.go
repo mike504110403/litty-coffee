@@ -64,6 +64,7 @@ INSERT INTO automation_settings (ig_account_id) VALUES (NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	box, _ := secrets.FromKey("scope-test")
+	authSvc.Box = box
 	hub := realtime.NewHub()
 	fake := ig.NewFake()
 	inb := inbox.NewService(pool, fake, hub)
@@ -86,6 +87,7 @@ INSERT INTO automation_settings (ig_account_id) VALUES (NULL)`); err != nil {
 	t.Cleanup(srv.Close)
 	s.Info = SystemInfo{WebOrigin: srv.URL, PublicBaseURL: srv.URL}
 	accounts.OAuth = ig.NewFakeOAuth(srv.URL + "/api/ig/oauth/callback")
+	registerAuth(t, srv.URL, authSvc)
 	return &fullEnv{srv: srv, s: s, pool: pool, auth: authSvc, pub: pub}
 }
 
@@ -127,7 +129,9 @@ func (c *client) noRedirect(path string, extra ...*http.Cookie) *http.Response {
 }
 
 // connect 走完整的（模擬）OAuth：start → 授權頁導回 callback → 連上兩個帳號。
+// IG 帳號連結只限超管：實際由另建的一位超管操作（owner 只用來取測試伺服器網址）。
 func connect(t *testing.T, owner *client) {
+	owner = newSuper(t, owner.base).client
 	res := owner.noRedirect("/api/ig/oauth/start")
 	if res.StatusCode != http.StatusFound {
 		t.Fatalf("start: %d", res.StatusCode)
@@ -318,19 +322,18 @@ func TestAccountScopeAcrossResources(t *testing.T) {
 		{"DELETE", pB("/api/automation/rules/%d?account=%d", ruleB.ID, A), "", 404},
 		// 模擬器
 		{"POST", "/api/dev/simulate", pB(`{"account":%d,"username":"x","text":"hi"}`, B), 403},
-		// 帳號與連線
-		{"POST", pB("/api/ig/accounts/%d/active", B), `{"active":false}`, 404},
-		{"POST", pB("/api/ig/accounts/%d/subscribe", B), "", 404},
+		// 帳號與連線：超管專屬（全權限的員工也不行）
+		{"POST", pB("/api/ig/accounts/%d/active", A), `{"active":false}`, 403},
+		{"POST", pB("/api/ig/accounts/%d/subscribe", A), "", 403},
 		{"POST", "/api/ig/connections/1/refresh", "", 403},
 		{"DELETE", "/api/ig/connections/1", "", 403},
+		{"GET", "/api/settings", "", 403},
+		{"GET", "/api/ig/oauth/start", "", 403},
 	}
 	for _, p := range probes {
 		if got := staff.status(p.method, p.path, p.body); got != p.want {
 			t.Errorf("staff %s %s = %d, want %d", p.method, p.path, got, p.want)
 		}
-	}
-	if res := staff.noRedirect("/api/ig/oauth/start"); !strings.Contains(res.Header.Get("Location"), "ig_error=") {
-		t.Errorf("staff oauth start should be refused: %s", res.Header.Get("Location"))
 	}
 	if code, _ := upload(t, staff, B, pngData(t)); code.StatusCode != 403 {
 		t.Errorf("staff upload to B = %d", code.StatusCode)
@@ -364,15 +367,12 @@ func TestAccountScopeAcrossResources(t *testing.T) {
 	if list := decode[[]acc](t, staff.json("GET", "/api/ig/accounts", "", 200)); len(list) != 1 || list[0].ID != A {
 		t.Errorf("staff accounts %+v", list)
 	}
-	set := decode[map[string]any](t, staff.json("GET", "/api/settings", "", 200))
-	if set["manageConnections"] != false || len(set["connections"].([]any)) != 0 || len(set["accounts"].([]any)) != 1 {
-		t.Errorf("staff settings %v", set)
-	}
 	staff.json("GET", pB("/api/automation/rules?account=%d", A), "", 200)
 	owner.json("GET", "/api/inbox/media/"+mediaFile, "", 200)
 
-	// 帳號停用：模擬器拒絕、回覆擋下
-	owner.json("POST", pB("/api/ig/accounts/%d/active", B), `{"active":false}`, 200)
+	// 帳號停用（超管）：模擬器拒絕、回覆擋下
+	owner.json("POST", pB("/api/ig/accounts/%d/active", B), `{"active":false}`, 403)
+	newSuper(t, e.srv.URL).json("POST", pB("/api/ig/accounts/%d/active", B), `{"active":false}`, 200)
 	owner.json("POST", "/api/dev/simulate", pB(`{"account":%d,"username":"bob","text":"還在嗎"}`, B), 409)
 	owner.json("POST", pB("/api/conversations/%d/messages", convB), `{"text":"x"}`, 409)
 }

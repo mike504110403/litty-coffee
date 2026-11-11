@@ -35,6 +35,7 @@ type AdminInput struct {
 	DisplayName string   `json:"displayName"`
 	Password    string   `json:"password"`
 	IsOwner     bool     `json:"isOwner"`
+	IsSuper     bool     `json:"isSuper"`
 	Permissions []string `json:"permissions"`
 	// IGAccountIDs 可見 IG 帳號；省略或空＝全部
 	IGAccountIDs []int64 `json:"igAccountIds"`
@@ -44,6 +45,7 @@ type AdminInput struct {
 type AdminPatch struct {
 	DisplayName *string   `json:"displayName"`
 	IsOwner     *bool     `json:"isOwner"`
+	IsSuper     *bool     `json:"isSuper"`
 	Permissions *[]string `json:"permissions"`
 	Disabled    *bool     `json:"disabled"`
 	// IGAccountIDs 可見 IG 帳號；nil＝不動，[]＝全部
@@ -51,7 +53,7 @@ type AdminPatch struct {
 }
 
 func (s *Service) ListAdmins(ctx context.Context) ([]User, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+userCols+` FROM admin_users ORDER BY is_owner DESC, id`)
+	rows, err := s.DB.Query(ctx, `SELECT `+userCols+` FROM admin_users ORDER BY is_super DESC, is_owner DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +95,7 @@ func checkPassword(pw string) error {
 	return nil
 }
 
-// CreateAdmin 新增管理員。只有店長能新增店長；非店長只能授予自己有的權限。
+// CreateAdmin 新增管理員。只有超管能新增超管；只有店長、超管能新增店長；其他人只能授予自己有的權限。
 func (s *Service) CreateAdmin(ctx context.Context, actor User, in AdminInput) (User, error) {
 	in.Username = strings.TrimSpace(in.Username)
 	if in.Username == "" || len([]rune(in.Username)) > 50 || strings.IndexFunc(in.Username, unicode.IsSpace) >= 0 {
@@ -106,19 +108,21 @@ func (s *Service) CreateAdmin(ctx context.Context, actor User, in AdminInput) (U
 		return User{}, err
 	}
 	perms := normalizePerms(in.Permissions)
-	if in.IsOwner && !actor.IsOwner {
+	if in.IsSuper && !actor.IsSuper {
+		return User{}, policy("只有超級管理員能新增超級管理員")
+	}
+	if in.IsOwner && !actor.ownerLevel() {
 		return User{}, policy("只有店長能新增店長")
 	}
-	if !actor.IsOwner {
+	if !actor.ownerLevel() {
 		if err := checkGrant(actor, perms); err != nil {
 			return User{}, err
 		}
 	}
 	accounts := normalizeAccounts(in.IGAccountIDs)
-	if in.IsOwner {
+	if in.IsOwner || in.IsSuper {
 		accounts = nil
-	}
-	if !in.IsOwner {
+	} else {
 		if err := checkAccountGrant(actor, accounts); err != nil {
 			return User{}, err
 		}
@@ -135,8 +139,8 @@ func (s *Service) CreateAdmin(ctx context.Context, actor User, in AdminInput) (U
 		return User{}, err
 	}
 	u, err := scanUser(s.DB.QueryRow(ctx, `
-INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions, ig_account_ids)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userCols, in.Username, string(hash), name, in.IsOwner, perms, accounts))
+INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions, ig_account_ids, is_super)
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+userCols, in.Username, string(hash), name, in.IsOwner, perms, accounts, in.IsSuper))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return User{}, ErrUsernameTaken
@@ -144,10 +148,11 @@ VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userCols, in.Username, string(hash),
 	return u, err
 }
 
-// UpdateAdmin 改顯示名稱／店長身分／權限／停用。規則：
-//   - 非店長不能動店長帳號、不能變更任何人的店長身分、不能授予自己沒有的權限
+// UpdateAdmin 改顯示名稱／超管、店長身分／權限／停用。規則：
+//   - 只有超管能動超管帳號、變更任何人的超管身分；超管可管理所有人（含店長）
+//   - 非店長（且非超管）不能動店長帳號、不能變更任何人的店長身分、不能授予自己沒有的權限
 //   - 不能停用自己、不能拿掉自己的「管理員」權限
-//   - 最後一位啟用中的店長不能被停用或降級
+//   - 最後一位啟用中的店長、最後一位啟用中的超管不能被停用或降級
 //   - 只能看部分 IG 帳號的人只能授予自己看得到的帳號，不能授予「全部」
 func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p AdminPatch) (User, error) {
 	tx, err := s.DB.Begin(ctx)
@@ -156,12 +161,17 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 	}
 	defer tx.Rollback(ctx)
 
-	// 先鎖住所有啟用中的店長，避免兩位店長同時互相降級／停用而變成零位店長
-	rows, err := tx.Query(ctx, `SELECT id FROM admin_users WHERE is_owner AND disabled_at IS NULL ORDER BY id FOR UPDATE`)
+	// 先鎖住所有啟用中的店長與超管，避免兩人同時互相降級／停用而變成零位店長（超管）
+	type head struct {
+		ID             int64
+		Owner, IsSuper bool
+	}
+	rows, err := tx.Query(ctx, `SELECT id, is_owner, is_super FROM admin_users WHERE (is_owner OR is_super) AND disabled_at IS NULL
+ORDER BY id FOR UPDATE`)
 	if err != nil {
 		return User{}, err
 	}
-	owners, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	heads, err := pgx.CollectRows(rows, pgx.RowToStructByPos[head])
 	if err != nil {
 		return User{}, err
 	}
@@ -177,12 +187,22 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 		return User{}, err
 	}
 
-	if target.IsOwner && !actor.IsOwner {
+	if target.IsSuper && !actor.IsSuper {
+		return User{}, policy("只有超級管理員能修改超級管理員帳號")
+	}
+	if target.IsOwner && !actor.ownerLevel() {
 		return User{}, policy("只有店長能修改店長帳號")
+	}
+	newSuper := target.IsSuper
+	if p.IsSuper != nil && *p.IsSuper != target.IsSuper {
+		if !actor.IsSuper {
+			return User{}, policy("只有超級管理員能變更超級管理員身分")
+		}
+		newSuper = *p.IsSuper
 	}
 	newOwner := target.IsOwner
 	if p.IsOwner != nil && *p.IsOwner != target.IsOwner {
-		if !actor.IsOwner {
+		if !actor.ownerLevel() {
 			return User{}, policy("只有店長能變更店長身分")
 		}
 		newOwner = *p.IsOwner
@@ -193,7 +213,7 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 			return User{}, err
 		}
 		newPerms = normalizePerms(*p.Permissions)
-		if !actor.IsOwner {
+		if !actor.ownerLevel() {
 			var added []string
 			for _, perm := range newPerms {
 				if !target.Can(perm) {
@@ -208,7 +228,7 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 	newAccounts := normalizeAccounts(storedAccounts)
 	if p.IGAccountIDs != nil {
 		newAccounts = normalizeAccounts(*p.IGAccountIDs)
-		if !slices.Equal(newAccounts, target.IGAccountIDs) || target.IsOwner {
+		if !slices.Equal(newAccounts, target.IGAccountIDs) || target.ownerLevel() {
 			if err := checkAccountGrant(actor, newAccounts); err != nil {
 				return User{}, err
 			}
@@ -217,7 +237,7 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 			return User{}, err
 		}
 	}
-	if newOwner {
+	if newOwner || newSuper {
 		newAccounts = nil
 	}
 	newDisabled := target.Disabled
@@ -236,27 +256,31 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 		if newDisabled {
 			return User{}, policy("不能停用自己")
 		}
-		if !newOwner && !slices.Contains(newPerms, PermAdmins) {
+		if !newOwner && !newSuper && !slices.Contains(newPerms, PermAdmins) {
 			return User{}, policy("不能移除自己的「管理員」權限")
 		}
 	}
-	if target.IsOwner && !target.Disabled && (!newOwner || newDisabled) {
-		others := 0
-		for _, oid := range owners {
-			if oid != target.ID {
-				others++
+	others := func(super bool) int {
+		n := 0
+		for _, h := range heads {
+			if h.ID != target.ID && ((super && h.IsSuper) || (!super && h.Owner)) {
+				n++
 			}
 		}
-		if others == 0 {
-			return User{}, policy("至少要保留一位啟用中的店長")
-		}
+		return n
+	}
+	if target.IsOwner && !target.Disabled && (!newOwner || newDisabled) && others(false) == 0 {
+		return User{}, policy("至少要保留一位啟用中的店長")
+	}
+	if target.IsSuper && !target.Disabled && (!newSuper || newDisabled) && others(true) == 0 {
+		return User{}, policy("至少要保留一位啟用中的超級管理員")
 	}
 
 	u, err := scanUser(tx.QueryRow(ctx, `
 UPDATE admin_users SET display_name = $2, is_owner = $3, permissions = $4,
   disabled_at = CASE WHEN NOT $5 THEN NULL ELSE COALESCE(disabled_at, now()) END, ig_account_ids = $6,
-  session_id = CASE WHEN $5 THEN NULL ELSE session_id END
-WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled, newAccounts))
+  session_id = CASE WHEN $5 THEN NULL ELSE session_id END, is_super = $7
+WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled, newAccounts, newSuper))
 	if err != nil {
 		return User{}, err
 	}
@@ -279,13 +303,25 @@ func (s *Service) ResetPassword(ctx context.Context, actor User, id int64, passw
 	if err != nil {
 		return err
 	}
-	if target.IsOwner && !actor.IsOwner {
-		return policy("只有店長能修改店長帳號")
+	if err := checkManage(actor, target); err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.Exec(ctx, `UPDATE admin_users SET password_hash = $2, session_id = NULL WHERE id = $1`, id, string(hash))
+	_, err = s.DB.Exec(ctx, `UPDATE admin_users SET password_hash = $2, session_id = NULL, mfa_pending_id = NULL WHERE id = $1`,
+		id, string(hash))
 	return err
+}
+
+// checkManage：超管帳號只有超管能動；店長帳號只有店長、超管能動。
+func checkManage(actor, target User) error {
+	if target.IsSuper && !actor.IsSuper {
+		return policy("只有超級管理員能修改超級管理員帳號")
+	}
+	if target.IsOwner && !actor.ownerLevel() {
+		return policy("只有店長能修改店長帳號")
+	}
+	return nil
 }

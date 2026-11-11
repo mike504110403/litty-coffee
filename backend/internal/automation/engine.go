@@ -32,6 +32,8 @@ type Engine struct {
 	Inbox *inbox.Service
 	AI    Decider // nil 或 LiveAI 未啟用＝沒有 Claude API Key，只跑規則
 	Ctx   context.Context
+	// Calls 記最近一次真的打出去的 AI 呼叫結果與耗時（系統狀態用）；nil＝不記
+	Calls *CallStats
 
 	locks sync.Map // convID -> *sync.Mutex
 }
@@ -58,6 +60,9 @@ func (e *Engine) OnInbound(convID int64, msg inbox.Message) {
 			log.Printf("automation: settings: %v", err)
 			return
 		}
+		if !st.AutoReplyEnabled {
+			return // 自動回覆總開關關閉：只收不回，連合併等待都不必
+		}
 		select {
 		case <-e.Ctx.Done():
 			return
@@ -73,6 +78,9 @@ func (e *Engine) OnInbound(convID int64, msg inbox.Message) {
 }
 
 func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) error {
+	if !st.AutoReplyEnabled {
+		return nil // 總開關關閉：不跑規則、AI、降頻，也不發轉真人通知
+	}
 	conv, err := e.Inbox.GetConversation(ctx, convID)
 	if err != nil {
 		return err
@@ -201,7 +209,11 @@ func (e *Engine) Evaluate(ctx context.Context, accountID int64, st Settings, his
 	for _, m := range history {
 		turns = append(turns, Turn{FromCustomer: m.Direction == "in", Text: m.Text})
 	}
+	start := time.Now()
 	d, err := e.AI.Decide(ctx, st, kb, turns)
+	if !errors.Is(err, ErrAIDisabled) {
+		e.Calls.Record("reply", start, err)
+	}
 	if errors.Is(err, ErrRefused) {
 		return Outcome{Kind: "handoff", Reply: st.HandoffMessage, Detail: "模型拒答，轉真人"}, nil
 	}

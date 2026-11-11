@@ -6,6 +6,9 @@ import { contactLabel, type Conversation } from '@/api/inbox'
 import { navItems } from '@/router/nav'
 import { useAuthStore } from '@/stores/auth'
 import { useInboxStore } from '@/stores/inbox'
+import { useSystemStore } from '@/stores/system'
+import { useAccountsStore } from '@/stores/accounts'
+import type { DigestReady, SystemAlert } from '@/api/system'
 import UserMenu from '@/components/UserMenu.vue'
 
 const route = useRoute()
@@ -39,6 +42,45 @@ function notifyHandoff({ conversation: c, reason }: { conversation: Conversation
     }
   }
 }
+
+// 系統告警（燈號轉紅／恢復）：超管、店長與有自動回覆權限的人；每日摘要產生：有分析權限的人。後端已依權限與可見帳號過濾
+const system = useSystemStore()
+const accountsStore = useAccountsStore()
+let offAlert: (() => void) | null = null
+let offDigest: (() => void) | null = null
+function notifyAlert(a: SystemAlert) {
+  ElNotification({
+    title: a.recovered ? `已恢復：${a.title}` : `系統異常：${a.title}`,
+    message: a.recovered ? a.message.replace(/^已恢復：/, '') : a.message,
+    type: a.recovered ? 'success' : 'error',
+    duration: a.recovered ? 8000 : 0, // 異常不自動消失
+    position: 'bottom-right',
+    onClick: () => void router.push({ name: 'dashboard' }),
+  })
+}
+function notifyDigest(d: DigestReady) {
+  ElNotification({
+    title: '每日摘要已產生',
+    message: `${accountsStore.label(d.igAccountId)} · ${d.date}${d.todoCount ? ` · 待處理 ${d.todoCount} 則` : ''}`,
+    type: 'info',
+    duration: 6000,
+    position: 'bottom-right',
+    onClick: () => void router.push({ name: 'dashboard' }),
+  })
+}
+onMounted(() => {
+  const wantsAlert = auth.can('automation')
+  if (!wantsAlert && !auth.can('analytics')) return
+  void accountsStore.ensure()
+  system.connect()
+  if (wantsAlert) offAlert = system.onAlert(notifyAlert)
+  if (auth.can('analytics')) offDigest = system.onDigest(notifyDigest)
+})
+onBeforeUnmount(() => {
+  offAlert?.()
+  offDigest?.()
+  system.disconnect()
+})
 
 onMounted(() => {
   if (!auth.can('inbox')) return // 沒收件匣權限就不連即時推送（後端會 403）

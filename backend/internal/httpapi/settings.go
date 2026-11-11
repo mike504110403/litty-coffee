@@ -314,7 +314,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, auth.ErrBadCredentials):
 		writeErr(w, http.StatusBadRequest, "目前密碼不正確")
-	case errors.Is(err, auth.ErrWeakPassword):
+	case errors.Is(err, auth.ErrWeakPassword), errors.Is(err, auth.ErrSamePassword):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		log.Printf("change password: %v", err)

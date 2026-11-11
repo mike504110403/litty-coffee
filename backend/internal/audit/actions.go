@@ -13,6 +13,7 @@ const (
 	ActionKicked         = "auth.kicked"
 	ActionIGConnect      = "ig.connect"
 	ActionIGConnectError = "ig.connect_failed"
+	ActionTOTPFailed     = "auth.totp_failed" // 登入第二步驗證碼／備援碼錯誤或錯太多次（不記碼）
 )
 
 // Route 是一條異動路由的登記。Pattern 不含 /api 前綴。
@@ -28,10 +29,13 @@ type Route struct {
 // Routes 是 router.go 所有登入後異動路由的中文名稱。新增路由時一併登記（TestRouteNamesCoverRouter 會抓漏）。
 var Routes = []Route{
 	{"POST", "/auth/password", "auth.change_password", "修改自己的密碼", "", true},
+	{"POST", "/auth/totp/setup", "auth.totp_setup", "開始綁定 Google Authenticator", "", true},
+	{"POST", "/auth/totp/enable", "auth.totp_enable", "確認綁定 Google Authenticator", "", true},
 
 	{"PATCH", "/conversations/{id}", "inbox.update_conversation", "變更對話狀態／接手方式", "conversation", false},
 	{"POST", "/conversations/{id}/read", "inbox.mark_read", "標記對話已讀", "conversation", false},
 	{"POST", "/conversations/{id}/messages", "inbox.reply", "回覆私訊", "conversation", false},
+	{"POST", "/conversations/{id}/suggest", "inbox.suggest", "AI 建議回覆", "conversation", true},
 	{"POST", "/messages/{id}/reviews", "review.mark_wrong", "標記回答有誤", "message", false},
 	{"POST", "/reviews/{id}/resolve", "review.resolve", "處理待改進問答", "review", false},
 
@@ -68,8 +72,11 @@ var Routes = []Route{
 	{"POST", "/admins", "admin.create", "新增管理員", "", false},
 	{"PATCH", "/admins/{id}", "admin.update", "修改管理員", "admin", false},
 	{"POST", "/admins/{id}/password", "admin.reset_password", "重設管理員密碼", "admin", true},
+	{"POST", "/admins/{id}/totp/reset", "admin.reset_totp", "重設管理員 Google Authenticator", "admin", true},
 
 	{"POST", "/dev/simulate", "dev.simulate", "模擬訊息（開發）", "", false},
+
+	{"POST", "/digests/generate", "digest.generate", "重新產生每日摘要", "", false},
 }
 
 // 不走 middleware 的動作
@@ -80,6 +87,7 @@ var specialActions = []ActionName{
 	{ActionKicked, "被其他裝置登入踢出"},
 	{ActionIGConnect, "連結 IG 帳號"},
 	{ActionIGConnectError, "連結 IG 帳號失敗"},
+	{ActionTOTPFailed, "登入驗證碼錯誤"},
 }
 
 // ActionName 是篩選下拉用的「動作鍵 → 中文名稱」。

@@ -46,6 +46,15 @@ async function save() {
     <el-form v-if="form" label-position="top" @submit.prevent="save">
       <el-form-item>
         <div class="switch-row">
+          <div class="label">
+            自動回覆總開關
+            <HelpTip text="關閉後這個帳號的私訊只收不回：不跑關鍵字規則與 AI，也不發轉真人通知。總覽頁也能切換。" />
+          </div>
+          <el-switch v-model="form.autoReplyEnabled" />
+        </div>
+      </el-form-item>
+      <el-form-item>
+        <div class="switch-row">
           <div class="label">AI 自動回覆<HelpTip text="關鍵字規則沒命中時，由 AI 依知識庫回答。關閉後只跑規則。" /></div>
           <el-switch v-model="form.aiEnabled" />
         </div>
@@ -90,6 +99,21 @@ async function save() {
           <el-switch v-model="form.aiModeration" />
         </div>
       </el-form-item>
+      <h3 class="section">每日摘要</h3>
+      <el-form-item>
+        <template #label>
+          產生時間
+          <HelpTip text="每天這個時間（店家時區）整理前一天的私訊：總量、熱門問題與待處理對話，顯示在總覽頁。" />
+        </template>
+        <el-time-select
+          v-model="form.digestTime"
+          start="00:00"
+          end="23:30"
+          step="00:30"
+          :clearable="false"
+          class="digest-time"
+        />
+      </el-form-item>
       <el-button type="primary" native-type="submit" :loading="saving">儲存設定</el-button>
     </el-form>
   </div>
@@ -133,6 +157,9 @@ async function save() {
   padding-top: 18px;
   border-top: 1px solid var(--lc-border);
   font-size: 15px;
+}
+.digest-time {
+  width: 140px;
 }
 .spam-row {
   display: flex;

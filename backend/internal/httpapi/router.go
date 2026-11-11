@@ -17,9 +17,11 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
+	"github.com/mike504110403/litty-coffee/backend/internal/digest"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
+	"github.com/mike504110403/litty-coffee/backend/internal/monitor"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 )
@@ -43,6 +45,13 @@ type Server struct {
 	Accounts         *account.Service
 	Info             SystemInfo
 	Audit            *audit.Store // 操作紀錄；nil＝不記
+	// SuggestAI 非 nil 時「AI 建議回覆」改用它（測試換假 AI）；nil＝沿用 CaptionAI
+	SuggestAI automation.Suggester
+	suggestRL suggestLimiter // 建議回覆：每位管理員每分鐘上限
+	// 總覽：系統狀態、每日摘要，與它們的即時通知
+	Monitor *monitor.Monitor // 系統狀態（總覽頁）；nil＝503
+	Digests *digest.Service  // 每日摘要；nil＝503
+	SysHub  *realtime.Hub    // system.alert／digest.ready（/api/system/stream）；nil＝串流只送心跳
 }
 
 func (s *Server) Routes() http.Handler {
@@ -64,12 +73,19 @@ func (s *Server) Routes() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
+		r.Post("/auth/totp", s.verifyTOTP) // 密碼正確後的第二步（待驗證碼 cookie，見 totp.go）
 		r.Group(func(r chi.Router) {
-			r.Use(s.Auth.Middleware, s.auditMiddleware) // 異動請求一律記操作紀錄（含權限不足）
+			r.Use(s.Auth.Middleware, s.auditMiddleware, s.Auth.SetupGate) // 異動請求一律記操作紀錄（含權限不足、首次登入鎖定）
 			// 所有登入者都可用
 			r.Get("/auth/me", s.me)
 			r.Post("/auth/password", s.changePassword)
+			// 綁定 GA：產生 secret／QR code → 輸入一組碼確認（回備援碼）
+			r.Post("/auth/totp/setup", s.totpSetup)
+			r.Post("/auth/totp/enable", s.totpEnable)
 			r.Get("/ig/accounts", s.listAccounts) // 可見的 IG 帳號（各頁的帳號篩選／選擇器）
+			// 總覽的系統狀態與通知串流（所有登入者；內容依可見帳號與權限過濾）
+			r.Get("/system/status", s.systemStatus) // 系統狀態：只回可見帳號
+			r.Get("/system/stream", s.systemStream) // system.alert／digest.ready 即時通知（依權限與可見帳號過濾）
 			// 各功能依權限把關（權限鍵見 auth.AllPerms）
 			perm := func(p string) chi.Router { return r.With(auth.RequirePerm(p)) }
 			s.inboxRoutes(perm(auth.PermInbox))
@@ -80,9 +96,10 @@ func (s *Server) Routes() http.Handler {
 			// 顧客標記（黑名單／問題顧客）收件匣也能改；備註與標籤仍限顧客權限（見 patchContact）
 			r.With(auth.RequireAnyPerm(auth.PermContacts, auth.PermInbox)).Patch("/contacts/{id}", s.patchContact)
 			s.analyticsRoutes(perm(auth.PermAnalytics))
+			s.digestRoutes(perm(auth.PermAnalytics))
 			s.postRoutes(perm(auth.PermSchedule))
-			s.settingsRoutes(perm(auth.PermIGAccounts))
-			s.credentialsRoutes(perm(auth.PermCredentials))
+			s.settingsRoutes(r.With(auth.RequireSuper))    // IG 帳號連結：超管專屬
+			s.credentialsRoutes(r.With(auth.RequireSuper)) // 串接憑證：超管專屬
 			s.adminRoutes(perm(auth.PermAdmins))
 			s.auditRoutes(perm(auth.PermAudit))
 			dev := perm(auth.PermInbox)
@@ -103,7 +120,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	u, tok, err := s.Auth.Login(r.Context(), in.Username, in.Password)
+	res, err := s.Auth.Authenticate(r.Context(), in.Username, in.Password)
+	u, tok := res.User, res.Session
 	if errors.Is(err, auth.ErrBadCredentials) {
 		s.recordLoginFailed(r, in.Username, "帳號或密碼錯誤", http.StatusUnauthorized)
 		writeErr(w, http.StatusUnauthorized, "帳號或密碼錯誤")
@@ -116,6 +134,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "login failed")
+		return
+	}
+	if res.Pending != "" { // 已綁 GA：先發待驗證碼 cookie，正式 session 等 /auth/totp
+		s.Auth.SetPendingCookie(w, res.Pending, auth.PendingMaxAge)
+		writeJSON(w, http.StatusOK, map[string]any{"mfaRequired": true})
 		return
 	}
 	s.recordAuth(r, audit.Entry{AdminID: u.ID, AdminName: u.DisplayName, Action: audit.ActionLogin,

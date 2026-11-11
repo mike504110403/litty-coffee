@@ -74,12 +74,17 @@ func (s *Server) putAutoSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var st automation.Settings
+	// 以目前設定為底：body 只帶部分欄位（例如總覽頁只切 autoReplyEnabled）時，其他欄位維持原值
+	st, err := s.Auto.Store.GetSettings(r.Context(), acc)
+	if err != nil {
+		s.autoErr(w, err)
+		return
+	}
 	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	st, err := s.Auto.Store.SaveSettings(r.Context(), acc, st)
+	st, err = s.Auto.Store.SaveSettings(r.Context(), acc, st)
 	if errors.Is(err, automation.ErrNotFound) {
 		s.autoErr(w, err)
 		return

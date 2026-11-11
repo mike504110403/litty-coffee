@@ -34,6 +34,9 @@ http.interceptors.response.use(
       } else if (!replacedNotice) {
         router.replace({ name: 'login', query: { redirect } })
       }
+    } else if (status === 403 && err.response?.data?.code === 'setup_required') {
+      // 首次登入鎖定（必須改密碼／超管未綁 GA）：導去設定頁，不跳錯誤
+      if (router.currentRoute.value.name !== 'setup') router.replace({ name: 'setup' })
     } else if (status !== 401) {
       ElMessage.error(err.response?.data?.error ?? '連線失敗，請稍後再試')
     }

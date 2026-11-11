@@ -6,10 +6,10 @@ import (
 )
 
 // IG 帳號可見範圍（安全邊界）：管理員只看得到 IGAccountIDs 內的帳號資料；nil＝全部帳號。
-// 店長一律全部。HTTP 層以 ?account= 過濾時，範圍外回 403；單筆資源在範圍外回 404（不洩漏存在與否）。
+// 店長、超管一律全部。HTTP 層以 ?account= 過濾時，範圍外回 403；單筆資源在範圍外回 404（不洩漏存在與否）。
 
 // AllAccounts 回是否可見全部帳號。
-func (u User) AllAccounts() bool { return u.IsOwner || len(u.IGAccountIDs) == 0 }
+func (u User) AllAccounts() bool { return u.ownerLevel() || len(u.IGAccountIDs) == 0 }
 
 // CanSeeAccount 回是否可見某個帳號。
 func (u User) CanSeeAccount(id int64) bool {

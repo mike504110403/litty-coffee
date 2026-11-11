@@ -85,7 +85,8 @@ func TestRouteNamesCoverRouter(t *testing.T) {
 	e := setupFull(t)
 	seen := map[string]bool{}
 	err := chi.Walk(e.s.Routes().(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !isMutating(method) || !strings.HasPrefix(route, "/api/") || route == "/api/auth/login" || route == "/api/auth/logout" {
+		if !isMutating(method) || !strings.HasPrefix(route, "/api/") || route == "/api/auth/login" || route == "/api/auth/logout" ||
+			route == "/api/auth/totp" {
 			return nil
 		}
 		rt, ok := audit.LookupRoute(method, route)
@@ -253,7 +254,7 @@ func TestAuditRecordsMutations(t *testing.T) {
 	}
 
 	// 機密遮蔽：憑證、改密碼、重設密碼、新增管理員、登入失敗都不得留下原文
-	owner.json("PUT", "/api/settings/credentials", `{"igAppId":"1234567890","igAppSecret":"SUPERSECRET-meta",
+	newSuper(t, e.srv.URL).json("PUT", "/api/settings/credentials", `{"igAppId":"1234567890","igAppSecret":"SUPERSECRET-meta",
 "anthropicApiKey":"sk-ant-SUPERSECRET","igVerifyToken":"VERIFY-SUPERSECRET","aiModel":"claude-haiku-4-5"}`, 200)
 	c := oneRow(t, e, "credentials.update")
 	b, _ := c.Detail["body"].(map[string]any)
@@ -423,7 +424,7 @@ func TestAuditListScopeAndFilters(t *testing.T) {
 			found = true
 		}
 	}
-	if !found || len(acts) != len(audit.Routes)+6 {
+	if !found || len(acts) != len(audit.Routes)+7 {
 		t.Fatalf("actions: %d %v", len(acts), found)
 	}
 }

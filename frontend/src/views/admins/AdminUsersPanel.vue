@@ -19,7 +19,8 @@ async function load() {
   try {
     const data = await adminsApi.list()
     admins.value = data.admins
-    allPerms.value = data.permissions
+    // ig_accounts、credentials 是超管專屬，不可勾選（後端清單已不含，這裡再保險過濾）
+    allPerms.value = data.permissions.filter((p) => p !== 'ig_accounts' && p !== 'credentials')
   } finally {
     loading.value = false
   }
@@ -27,10 +28,13 @@ async function load() {
 onMounted(load)
 
 const isSelf = (u: AdminUser) => u.id === me.value?.id
-// 非店長不能動店長帳號（後端同樣會擋）
-const canManage = (u: AdminUser) => !!me.value?.isOwner || !u.isOwner
+const meSuper = computed(() => !!me.value?.isSuper)
+const meOwnerLevel = computed(() => !!me.value?.isOwner || meSuper.value)
+// 超管帳號只有超管能動；店長帳號只有店長、超管能動（後端同樣會擋）
+const canManage = (u: AdminUser) => (u.isSuper ? meSuper.value : meOwnerLevel.value || !u.isOwner)
 
 function roleSummary(u: AdminUser): string {
+  if (u.isSuper) return '全部權限，含 IG 帳號與憑證'
   if (u.isOwner) return '全部權限'
   if (!u.permissions.length) return '沒有任何功能權限'
   return u.permissions.map((p) => permMeta[p]?.label ?? p).join('、')
@@ -41,7 +45,7 @@ const dialog = ref(false)
 const editing = ref<AdminUser | null>(null)
 const saving = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive({ username: '', displayName: '', password: '', isOwner: false, permissions: [] as Perm[] })
+const form = reactive({ username: '', displayName: '', password: '', isOwner: false, isSuper: false, permissions: [] as Perm[] })
 
 const rules: FormRules = {
   username: [
@@ -57,7 +61,7 @@ const rules: FormRules = {
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { username: '', displayName: '', password: '', isOwner: false, permissions: [] })
+  Object.assign(form, { username: '', displayName: '', password: '', isOwner: false, isSuper: false, permissions: [] })
   dialog.value = true
   formRef.value?.clearValidate()
 }
@@ -69,7 +73,8 @@ function openEdit(u: AdminUser) {
     displayName: u.displayName,
     password: '',
     isOwner: u.isOwner,
-    permissions: u.isOwner ? [] : [...u.permissions],
+    isSuper: u.isSuper,
+    permissions: u.isOwner || u.isSuper ? [] : [...u.permissions],
   })
   dialog.value = true
   formRef.value?.clearValidate()
@@ -77,19 +82,20 @@ function openEdit(u: AdminUser) {
 
 // 非店長只能授予自己有的權限；對方原本就有的可以保留或拿掉
 function permDisabled(p: Perm): boolean {
-  if (form.isOwner) return true
+  if (allPermsGranted.value) return true
   if (editing.value && isSelf(editing.value) && p === 'admins') return true // 不能拿掉自己的管理員權限
-  if (me.value?.isOwner || auth.can(p)) return false
+  if (meOwnerLevel.value || auth.can(p)) return false
   return !(editing.value?.permissions.includes(p) && !editing.value.isOwner)
 }
 
-const ownerSwitchDisabled = computed(() => !me.value?.isOwner)
+const allPermsGranted = computed(() => form.isOwner || form.isSuper)
+const ownerSwitchDisabled = computed(() => !meOwnerLevel.value)
 
-// 店長把自己降級時，自動保留自己的「管理員」權限（後端也不允許拿掉）
+// 店長／超管把自己降級時，自動保留自己的「管理員」權限（後端也不允許拿掉）
 watch(
-  () => form.isOwner,
-  (owner) => {
-    if (!owner && editing.value && isSelf(editing.value) && !form.permissions.includes('admins')) {
+  allPermsGranted,
+  (all) => {
+    if (!all && editing.value && isSelf(editing.value) && !form.permissions.includes('admins')) {
       form.permissions.push('admins')
     }
   },
@@ -104,12 +110,17 @@ async function save() {
       await adminsApi.update(u.id, {
         displayName: form.displayName,
         isOwner: form.isOwner,
-        permissions: form.isOwner ? undefined : form.permissions,
+        isSuper: meSuper.value ? form.isSuper : undefined,
+        permissions: allPermsGranted.value ? undefined : form.permissions,
       })
       if (isSelf(u)) await auth.fetchMe()
       ElMessage.success('已更新')
     } else {
-      await adminsApi.create({ ...form, permissions: form.isOwner ? [] : form.permissions })
+      await adminsApi.create({
+        ...form,
+        isSuper: meSuper.value ? form.isSuper : undefined,
+        permissions: allPermsGranted.value ? [] : form.permissions,
+      })
       ElMessage.success('已新增管理員')
     }
     dialog.value = false
@@ -138,6 +149,26 @@ async function resetPassword(u: AdminUser) {
   try {
     await adminsApi.resetPassword(u.id, value)
     ElMessage.success('密碼已重設，請轉告對方')
+  } catch {
+    // 攔截器已顯示
+  }
+}
+
+// ---- 重設 GA（超管專屬）----
+async function resetTotp(u: AdminUser) {
+  try {
+    await ElMessageBox.confirm(
+      u.isSuper ? '對方會立刻被登出，重新登入後必須重新綁定。' : '對方下次登入不必輸入驗證碼，可再自行綁定。原本的備援碼一併作廢。',
+      `重設「${u.displayName || u.username}」的 Google Authenticator？`,
+      { confirmButtonText: '重設', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await adminsApi.resetTotp(u.id)
+    ElMessage.success('已重設 GA')
+    await load()
   } catch {
     // 攔截器已顯示
   }
@@ -173,7 +204,7 @@ async function toggleDisabled(u: AdminUser) {
     <div class="head">
       <div class="head-title">
         共 {{ admins.length }} 位
-        <HelpTip text="每位管理員用自己的帳號登入；店長擁有全部權限，其他人依勾選的功能使用後台。總覽、深色模式與修改密碼（頭像選單）所有人都能用。" />
+        <HelpTip text="每位管理員用自己的帳號登入；超管位階最高，只有超管能連結 IG 帳號、設定憑證、重設 GA；店長擁有其他全部權限；其他人依勾選的功能使用後台。總覽、深色模式、修改密碼與綁定 GA（頭像選單）所有人都能用。" />
       </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">新增管理員</el-button>
     </div>
@@ -191,7 +222,10 @@ async function toggleDisabled(u: AdminUser) {
           </div>
         </div>
         <div class="role">
+          <el-tag v-if="u.isSuper" size="small" type="danger" effect="light">超管</el-tag>
           <el-tag v-if="u.isOwner" size="small" type="warning" effect="light">店長</el-tag>
+          <el-tag v-if="u.totpEnabled" size="small" type="success" effect="plain">GA 已綁定</el-tag>
+          <el-tag v-else-if="u.isSuper" size="small" type="info" effect="plain">GA 未綁定</el-tag>
           <span class="perms">{{ roleSummary(u) }}</span>
         </div>
         <div class="login">
@@ -210,11 +244,12 @@ async function toggleDisabled(u: AdminUser) {
         <div v-if="canManage(u)" class="ops">
           <el-button size="small" text @click="openEdit(u)">編輯</el-button>
           <el-button v-if="!isSelf(u)" size="small" text @click="resetPassword(u)">重設密碼</el-button>
+          <el-button v-if="meSuper && !isSelf(u) && u.totpEnabled" size="small" text @click="resetTotp(u)">重設 GA</el-button>
           <el-button v-if="!isSelf(u)" size="small" text :type="u.disabled ? 'primary' : 'danger'" @click="toggleDisabled(u)">
             {{ u.disabled ? '啟用' : '停用' }}
           </el-button>
         </div>
-        <div v-else class="ops muted small">只有店長能修改</div>
+        <div v-else class="ops muted small">{{ u.isSuper ? '只有超管能修改' : '只有店長能修改' }}</div>
       </li>
     </ul>
 
@@ -229,20 +264,26 @@ async function toggleDisabled(u: AdminUser) {
         <el-form-item v-if="!editing" label="初始密碼" prop="password">
           <el-input v-model="form.password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
+        <el-form-item v-if="meSuper" label="超級管理員">
+          <div class="owner-row">
+            <el-switch v-model="form.isSuper" />
+            <HelpTip text="超管擁有全部權限，並且是唯一能連結 IG 帳號、設定憑證、重設 GA 的角色。第一次登入必須綁定 Google Authenticator。" />
+          </div>
+        </el-form-item>
         <el-form-item label="店長">
           <div class="owner-row">
             <el-switch v-model="form.isOwner" :disabled="ownerSwitchDisabled" />
-            <HelpTip :text="ownerSwitchDisabled ? '只有店長能設定店長。' : '店長擁有全部權限，且不受下方勾選限制。'" />
+            <HelpTip :text="ownerSwitchDisabled ? '只有店長能設定店長。' : '店長擁有 IG 帳號與憑證以外的全部權限，且不受下方勾選限制。'" />
           </div>
         </el-form-item>
         <el-form-item label="功能權限">
-          <el-checkbox-group v-if="!form.isOwner" v-model="form.permissions" class="perm-grid">
+          <el-checkbox-group v-if="!allPermsGranted" v-model="form.permissions" class="perm-grid">
             <el-checkbox v-for="p in allPerms" :key="p" :value="p" :disabled="permDisabled(p)">
               <span class="perm-label">{{ permMeta[p]?.label ?? p }}</span>
               <HelpTip v-if="permMeta[p]?.desc" :text="permMeta[p]?.desc" />
             </el-checkbox>
           </el-checkbox-group>
-          <p v-else class="muted small">店長擁有全部權限。</p>
+          <p v-else class="muted small">{{ form.isSuper ? '超管擁有全部權限。' : '店長擁有全部權限。' }}</p>
         </el-form-item>
       </el-form>
       <template #footer>

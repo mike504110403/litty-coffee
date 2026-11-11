@@ -21,10 +21,12 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
+	"github.com/mike504110403/litty-coffee/backend/internal/digest"
 	"github.com/mike504110403/litty-coffee/backend/internal/httpapi"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
+	"github.com/mike504110403/litty-coffee/backend/internal/monitor"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
 	"github.com/mike504110403/litty-coffee/backend/internal/secrets"
@@ -61,6 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	authSvc.Box = box // GA（TOTP）secret 加解密
 	if keyFallback {
 		log.Print("警告：未設 SECRET_KEY，後台憑證加密金鑰改由 JWT_SECRET 衍生（MVP 兜底）；換 JWT_SECRET 會讓已存憑證解不開，正式環境請設獨立的 SECRET_KEY")
 	}
@@ -142,6 +145,22 @@ func main() {
 		OnAPIError: api.Accounts.NoteAPIError}
 	go api.Posts.Insights.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
+
+	// 總覽：系統狀態（每分鐘檢查、轉紅／恢復推 system.alert）與每日摘要（到時間產生前一天的摘要、推 digest.ready）。
+	// 兩者走獨立的 SysHub（/api/system/stream），不需收件匣權限也收得到
+	api.SysHub = realtime.NewHub()
+	aiCalls := &automation.CallStats{}
+	engine.Calls = aiCalls
+	var metaChecker monitor.MetaChecker = ig.NewOAuthClient("", "", "", "", cfg.IGAPIBase) // 只用帳號 token 打 GET /{ig-id}
+	if cfg.DevSimulator {
+		metaChecker = api.Accounts.OAuth.(*ig.FakeOAuth) // 模擬模式不打真 Meta
+	}
+	api.Monitor = &monitor.Monitor{DB: pool, Meta: metaChecker, Creds: api.Accounts.Credentials, NoteAPIError: api.Accounts.NoteAPIError,
+		AIKey: func() string { return creds.Values().AnthropicKey }, PingAI: httpapi.ClaudeKeyProbe(""),
+		Calls: aiCalls, Hub: api.SysHub}
+	go api.Monitor.Run(ctx)
+	api.Digests = &digest.Service{DB: pool, Analytics: api.Analytics, Loc: loc, AI: liveAI, Calls: aiCalls, Hub: api.SysHub}
+	go api.Digests.Run(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return ctx }} // 關機時一併結束 SSE 長連線

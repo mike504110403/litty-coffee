@@ -24,6 +24,7 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
 	"github.com/mike504110403/litty-coffee/backend/internal/realtime"
+	"github.com/mike504110403/litty-coffee/backend/internal/secrets"
 )
 
 // 整合測試：需要地端 PG，TEST_DATABASE_URL 未設時跳過。
@@ -59,6 +60,8 @@ func setupServer(t *testing.T) (*httptest.Server, *auth.Service, *pgxpool.Pool) 
 	}
 	srv := httptest.NewServer(s.Routes())
 	t.Cleanup(srv.Close)
+	authSvc.Box, _ = secrets.FromKey("perms-test")
+	registerAuth(t, srv.URL, authSvc)
 	return srv, authSvc, pool
 }
 
@@ -115,8 +118,12 @@ var probes = []struct {
 	{auth.PermAutomation, "POST", "/api/automation/rules", "x", 400},
 	{auth.PermSchedule, "GET", "/api/posts", "", 200},
 	{auth.PermAnalytics, "GET", "/api/analytics/summary", "", 200},
-	{auth.PermIGAccounts, "GET", "/api/settings", "", 200},
-	{auth.PermCredentials, "PUT", "/api/settings/credentials", "x", 400},
+	// 超管專屬：任何權限組合、店長都是 403（超管見 TestSuperOnlyRoutes）
+	{superOnly, "GET", "/api/settings", "", 200},
+	{superOnly, "PUT", "/api/settings/credentials", "x", 400},
+	{superOnly, "POST", "/api/ig/accounts/1/active", "x", 400},
+	{superOnly, "POST", "/api/ig/connections/1/refresh", "", 0},
+	{superOnly, "GET", "/api/ig/oauth/start", "", 0},
 	{auth.PermAdmins, "GET", "/api/admins", "", 200},
 	{auth.PermAudit, "GET", "/api/audit-logs", "", 200},
 	{auth.PermAudit, "GET", "/api/audit-logs/actions", "", 200},
@@ -156,8 +163,12 @@ func TestEachPermissionGatesItsRoutes(t *testing.T) {
 
 	boss := login(t, srv, "boss", "boss-password")
 	for _, p := range probes {
-		if got := boss.status(p.method, p.path, p.body); got != p.want {
-			t.Errorf("owner: %s %s = %d, want %d", p.method, p.path, got, p.want)
+		want := p.want
+		if p.perm == superOnly {
+			want = http.StatusForbidden
+		}
+		if got := boss.status(p.method, p.path, p.body); got != want {
+			t.Errorf("owner: %s %s = %d, want %d", p.method, p.path, got, want)
 		}
 	}
 	var me auth.User

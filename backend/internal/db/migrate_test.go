@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // isolated 在測試庫裡開一個獨立 schema（search_path），讓 migration 從零跑，不碰其他測試的表。
@@ -338,5 +339,123 @@ VALUES ('boss', 'h1', '老闆', true, '{}', now()), ('mei', 'h2', '小美', fals
 	}
 	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 00015：既有自動回覆設定（範本＋帳號）保留、總開關預設開、摘要時間預設 09:00；daily_digests 每帳號每天一份、
+// 帳號刪除時一併刪；摘要時間有格式檢查。Down 再 Up 也要能跑。
+func TestMigration15DashboardPreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 14); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acc-a'), ('acc-b')`)
+	mustExec(t, d, `DELETE FROM automation_settings`)
+	mustExec(t, d, `INSERT INTO automation_settings (ig_account_id, persona, ai_enabled, spam_max_msgs) VALUES (NULL, '範本', true, 5), (1, 'A 店', false, 7)`)
+	if err := goose.UpToContext(ctx, d, "migrations", 15); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM automation_settings WHERE auto_reply_enabled AND digest_time = '09:00'`) != 2 ||
+		strOf(t, d, `SELECT persona || ai_enabled::text || spam_max_msgs::text FROM automation_settings WHERE ig_account_id = 1`) != "A 店false7" {
+		t.Fatal("既有設定應保留、總開關開、摘要時間 09:00")
+	}
+	if _, err := d.Exec(`UPDATE automation_settings SET digest_time = '9:00'`); err == nil {
+		t.Fatal("digest_time 應有格式檢查")
+	}
+	mustExec(t, d, `INSERT INTO daily_digests (ig_account_id, digest_date, content) VALUES (1, '2026-11-11', '{"todo":[]}'), (2, '2026-11-11', '{}')`)
+	if _, err := d.Exec(`INSERT INTO daily_digests (ig_account_id, digest_date) VALUES (1, '2026-11-11')`); err == nil {
+		t.Fatal("同一帳號同一天只能一份")
+	}
+	mustExec(t, d, `DELETE FROM ig_accounts WHERE ig_user_id = 'acc-b'`)
+	if intOf(t, d, `SELECT count(*) FROM daily_digests`) != 1 {
+		t.Fatal("帳號刪除時摘要一併刪")
+	}
+	if err := goose.DownToContext(ctx, d, "migrations", 14); err != nil {
+		t.Fatal(err)
+	}
+	if strOf(t, d, `SELECT persona FROM automation_settings WHERE ig_account_id = 1`) != "A 店" ||
+		intOf(t, d, `SELECT count(*) FROM automation_settings`) != 2 {
+		t.Fatal("down: 設定應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 00016：建立預設超管 superAdmin（admin123、必須改密碼）；既有管理員資料保留、ig_accounts／credentials 勾選拿掉；
+// 再跑一次（Down 再 Up）不重複建立。
+func TestMigration16SeedsSuperAdmin(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 15); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions, session_id, last_login_at)
+VALUES ('admin', 'h1', '老闆', true, '{}', 'sid-1', now()),
+       ('mei', 'h2', '小美', false, '{inbox,ig_accounts,credentials,audit}', NULL, NULL)`)
+	if err := goose.UpToContext(ctx, d, "migrations", 16); err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	var super, mustChange, owner bool
+	var perms, disabled int64
+	if err := d.QueryRow(`SELECT password_hash, is_super, must_change_password, is_owner, cardinality(permissions),
+  (disabled_at IS NOT NULL)::int FROM admin_users WHERE username = 'superAdmin'`).Scan(&hash, &super, &mustChange, &owner, &perms, &disabled); err != nil {
+		t.Fatal(err)
+	}
+	if !super || !mustChange || owner || perms != 0 || disabled != 0 ||
+		bcrypt.CompareHashAndPassword([]byte(hash), []byte("admin123")) != nil {
+		t.Fatalf("seeded superAdmin: super=%v mustChange=%v owner=%v", super, mustChange, owner)
+	}
+	if strOf(t, d, `SELECT display_name || password_hash || array_to_string(permissions, ',') || session_id FROM admin_users WHERE username = 'admin'`) != "老闆h1sid-1" ||
+		intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'admin' AND is_owner AND NOT is_super AND NOT must_change_password
+  AND totp_secret IS NULL AND totp_enabled_at IS NULL`) != 1 {
+		t.Fatal("既有店長應保留、不變成超管")
+	}
+	if strOf(t, d, `SELECT array_to_string(permissions, ',') FROM admin_users WHERE username = 'mei'`) != "inbox,audit" {
+		t.Fatal("ig_accounts／credentials 勾選應拿掉、其他保留")
+	}
+	// 冪等：Down 再 Up 只會有一位 superAdmin
+	if err := goose.DownToContext(ctx, d, "migrations", 15); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'superAdmin'`) != 0 ||
+		intOf(t, d, `SELECT count(*) FROM admin_users`) != 2 {
+		t.Fatal("down: 沒登入過的預設超管應刪除、其他保留")
+	}
+	if err := goose.UpToContext(ctx, d, "migrations", 16); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'superAdmin' AND is_super`) != 1 {
+		t.Fatal("再 Up 應重新建立一位 superAdmin")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 00016：已有同名 superAdmin 帳號時不覆蓋（ON CONFLICT DO NOTHING）；用過的超管 Down 時停用而非刪除。
+func TestMigration16KeepsExistingSuperAdminName(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 15); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO admin_users (username, password_hash, display_name, is_owner) VALUES ('superAdmin', 'mine', '我', true)`)
+	if err := goose.UpToContext(ctx, d, "migrations", 16); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'superAdmin' AND password_hash = 'mine' AND is_owner
+  AND NOT is_super AND NOT must_change_password`) != 1 || intOf(t, d, `SELECT count(*) FROM admin_users`) != 1 {
+		t.Fatal("既有同名帳號應原封不動")
+	}
+	mustExec(t, d, `INSERT INTO admin_users (username, password_hash, is_super, last_login_at) VALUES ('root', 'h', true, now())`)
+	if err := goose.DownToContext(ctx, d, "migrations", 15); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'root' AND disabled_at IS NOT NULL`) != 1 ||
+		intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'superAdmin' AND disabled_at IS NULL`) != 1 {
+		t.Fatal("down: 超管應停用、非超管不動")
 	}
 }

@@ -6,17 +6,19 @@ export interface AdminCreate {
   displayName: string
   password: string
   isOwner: boolean
+  isSuper?: boolean
   permissions: Perm[]
 }
 
 export interface AdminPatch {
   displayName?: string
   isOwner?: boolean
+  isSuper?: boolean
   permissions?: Perm[]
   disabled?: boolean
 }
 
-// 權限鍵的中文名稱與說明（鍵清單以後端回傳的 permissions 為準）
+// 權限鍵的中文名稱與說明（鍵清單以後端回傳的 permissions 為準；ig_accounts、credentials 是超管專屬，不會出現在勾選清單）
 export const permMeta: Record<Perm, { label: string; desc: string }> = {
   inbox: { label: '收件匣', desc: '看私訊、即時更新、回覆顧客' },
   contacts: { label: '顧客', desc: '顧客資料與標籤' },
@@ -34,4 +36,5 @@ export const adminsApi = {
   create: (in_: AdminCreate) => http.post<AdminUser>('/admins', in_).then((r) => r.data),
   update: (id: number, patch: AdminPatch) => http.patch<AdminUser>(`/admins/${id}`, patch).then((r) => r.data),
   resetPassword: (id: number, password: string) => http.post(`/admins/${id}/password`, { password }),
+  resetTotp: (id: number) => http.post(`/admins/${id}/totp/reset`),
 }

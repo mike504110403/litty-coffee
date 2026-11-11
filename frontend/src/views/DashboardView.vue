@@ -1,15 +1,32 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ChatDotRound, MagicStick, Timer, Calendar, EditPen, ArrowRight } from '@element-plus/icons-vue'
+import { Calendar, EditPen, ArrowRight } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
-import { postsApi } from '@/api/posts'
+import { interactions, kindLabels, postsApi, type Post } from '@/api/posts'
 import { flagsApi } from '@/api/flags'
-import { formatCount, formatDuration, formatPercent } from '@/utils/format'
+import { intentLabels } from '@/api/automation'
+import { delta, formatCount, formatDuration, formatPercent } from '@/utils/format'
+import ColumnChart from '@/components/charts/ColumnChart.vue'
+import BarList from '@/components/charts/BarList.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import StatusPanel from '@/views/dashboard/StatusPanel.vue'
+import DigestCard from '@/views/dashboard/DigestCard.vue'
 import { useAccountsStore } from '@/stores/accounts'
 
+// 總覽＝監控頁：系統狀態（所有登入者）→ 指標 → 每日摘要與圖表（分析權限）→ 貼文成效。
+// 各區塊依權限顯示；沒權限的 API 不打（後端會 403）
+
+// 已驗證的類別色（自動＝slot 1 藍、真人＝slot 2 橘）；單一系列數量圖用藍。色值在 styles/theme.scss（--lc-chart-*）
+const C_AUTO = 'var(--lc-chart-1)'
+const C_HUMAN = 'var(--lc-chart-2)'
+const C_SINGLE = 'var(--lc-chart-1)'
+
 const auth = useAuthStore()
+const canAnalytics = computed(() => auth.can('analytics'))
+const canSchedule = computed(() => auth.can('schedule'))
+const canAutomation = computed(() => auth.can('automation'))
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -18,107 +35,311 @@ const greeting = computed(() => {
   return '晚安'
 })
 
-const today = ref<Summary | null>(null)
-const upcoming = ref<number | null>(null)
-const openReviews = ref<number | null>(null)
-// 各區塊依權限顯示；沒權限的 API 不打（後端會 403）
-const canAnalytics = computed(() => auth.can('analytics'))
-const canSchedule = computed(() => auth.can('schedule'))
-const canAutomation = computed(() => auth.can('automation'))
-// 帳號篩選（null＝全部帳號）
+// 帳號篩選（null＝全部帳號）與期間；統計、貼文成效、待發排程、待改進都跟著它
 const accounts = useAccountsStore()
 const account = ref<number | null>(null)
-async function load() {
+const days = ref(7)
+const ranges = [
+  { v: 1, label: '今天' },
+  { v: 7, label: '7 天' },
+  { v: 30, label: '30 天' },
+  { v: 90, label: '90 天' },
+]
+const tableView = ref(false)
+
+const data = ref<Summary | null>(null)
+const loading = ref(false)
+const upcoming = ref<number | null>(null)
+const openReviews = ref<number | null>(null)
+
+async function loadSummary() {
+  if (!canAnalytics.value) return
+  loading.value = true
+  try {
+    data.value = await crmApi.summary(days.value, account.value ?? undefined)
+  } finally {
+    loading.value = false
+  }
+}
+async function loadCounts() {
   const acc = account.value ?? undefined
-  ;[today.value, upcoming.value, openReviews.value] = await Promise.all([
-    canAnalytics.value ? crmApi.summary(1, acc) : null,
+  ;[upcoming.value, openReviews.value] = await Promise.all([
     canSchedule.value ? postsApi.upcomingCount(acc) : null,
     canAutomation.value ? flagsApi.openCount(acc) : null,
   ])
 }
+
+// ---- 貼文成效：區間內已發佈、且已取得數據的貼文，依互動數排序（需要分析＋排程權限） ----
+const posts = ref<Post[]>([])
+const postsLoading = ref(false)
+const showPosts = computed(() => canAnalytics.value && canSchedule.value)
+async function loadPosts() {
+  if (!showPosts.value) return
+  postsLoading.value = true
+  try {
+    const from = new Date(Date.now() - days.value * 86400_000)
+    posts.value = await postsApi.list({ status: 'published', from: from.toISOString(), account: account.value ?? undefined })
+  } catch {
+    posts.value = []
+  } finally {
+    postsLoading.value = false
+  }
+}
+
 onMounted(() => {
   void accounts.ensure()
-  void load()
+  void loadSummary()
+  void loadCounts()
+  void loadPosts()
 })
-watch(account, load)
-
-const stats = computed(() => {
-  const c = today.value?.current
-  const a = canAnalytics.value
-  const s = canSchedule.value
-  return [
-    { show: a, label: '今日顧客訊息', value: c ? formatCount(c.totals.inbound) : '—', icon: ChatDotRound, tone: 'caramel' },
-    { show: a, label: '今日自動回覆占比', value: formatPercent(c?.autoShare), icon: MagicStick, tone: 'roast' },
-    { show: a, label: '今日回應時間中位數', value: formatDuration(c?.response.medianSecs), icon: Timer, tone: 'sage' },
-    { show: s, label: '待發排程', value: upcoming.value == null ? '—' : String(upcoming.value), icon: Calendar, tone: 'rose' },
-  ].filter((x) => x.show)
+watch([days, account], () => {
+  void loadSummary()
+  void loadPosts()
 })
+watch(account, loadCounts)
 
-// 只列出這位管理員有權限做的設定步驟
-const steps = computed(() =>
-  [
-    { perm: 'ig_accounts', title: '連結 IG 專業帳號', desc: '在「設定」用 Facebook 登入授權，可一次連多個帳號' },
-    { perm: 'automation', title: '建立店家知識庫', desc: '菜單、營業時間、地址，讓 AI 回答更準' },
-    { perm: 'automation', title: '設定關鍵字回覆', desc: '例如「菜單」「訂位」自動回應' },
-  ].filter((st) => auth.can(st.perm as Parameters<typeof auth.can>[0])),
+const num = (n: number | undefined) => (n == null ? '—' : formatCount(n))
+const shortDate = (iso: string | null) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+const rankedPosts = computed(() =>
+  posts.value
+    .filter((p) => p.insightsFetchedAt)
+    .sort((a, b) => interactions(b) - interactions(a) || (b.insights.views ?? 0) - (a.insights.views ?? 0))
+    .slice(0, 10)
+    .map((p) => ({
+      id: p.id,
+      thumb: p.media[0]?.kind === 'image' ? p.media[0].url : '',
+      kind: kindLabels[p.kind],
+      caption: p.caption || (p.kind === 'story' ? '限動' : '（無文案）'),
+      date: shortDate(p.publishedAt),
+      views: num(p.insights.views),
+      reach: num(p.insights.reach),
+      likes: num(p.insights.likes),
+      comments: num(p.insights.comments ?? p.insights.replies),
+      saved: num(p.insights.saved),
+      shares: num(p.insights.shares),
+      total: formatCount(interactions(p)),
+    })),
 )
+const pendingPosts = computed(() => posts.value.filter((p) => !p.insightsFetchedAt).length)
+
+interface Tile {
+  label: string
+  value: string
+  sub?: string
+  d: number | null
+  upIsGood: boolean
+}
+const vsLabel = computed(() => (days.value === 1 ? 'vs 昨天' : `vs 前 ${days.value} 天`))
+const tiles = computed<Tile[]>(() => {
+  if (!data.value) return []
+  const c = data.value.current
+  const p = data.value.previous
+  return [
+    { label: '顧客訊息', value: formatCount(c.totals.inbound), d: delta(c.totals.inbound, p.totals.inbound), upIsGood: true },
+    {
+      label: '自動回覆占比',
+      value: formatPercent(c.autoShare),
+      sub: `自動 ${c.totals.outboundAuto} · 真人 ${c.totals.outboundHuman}`,
+      d: delta(c.autoShare, p.autoShare),
+      upIsGood: true,
+    },
+    {
+      label: '回應時間中位數',
+      value: formatDuration(c.response.medianSecs),
+      sub: `平均：自動 ${formatDuration(c.response.autoAvgSecs)} · 真人 ${formatDuration(c.response.humanAvgSecs)}`,
+      d: delta(c.response.medianSecs, p.response.medianSecs),
+      upIsGood: false,
+    },
+    {
+      label: '互動顧客',
+      value: formatCount(c.totals.activeContacts),
+      sub: `新顧客 ${c.totals.newContacts} · 需真人 ${c.totals.humanConvs}`,
+      d: delta(c.totals.activeContacts, p.totals.activeContacts),
+      upIsGood: true,
+    },
+  ]
+})
+const unanswered = computed(() => {
+  const r = data.value?.current.response
+  return r ? r.turns - r.answered : 0
+})
+
+const dailyCats = computed(() => data.value?.daily.map((d) => d.date.replace(/^(\d+)-(\d+)-(\d+)$/, '$1/$2/$3')) ?? [])
+const dailyShort = computed(() => data.value?.daily.map((d) => `${+d.date.slice(5, 7)}/${+d.date.slice(8)}`) ?? [])
+const intentItems = computed(
+  () => data.value?.intents.map((i) => ({ label: intentLabels[i.key] ?? i.key, value: i.count })) ?? [],
+)
+const busiest = computed(() => {
+  const h = data.value?.hours ?? []
+  const max = Math.max(...h, 0)
+  return max ? h.indexOf(max) : null
+})
+const showCounts = computed(() => canSchedule.value || canAutomation.value)
 </script>
 
 <template>
-  <div>
+  <div v-loading="loading && !data">
     <div class="head">
-      <div>
-        <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
-        <p class="lc-page-sub">今天店裡的 IG 狀況一覽</p>
-      </div>
-      <AccountSelect
-        v-if="accounts.multi && (stats.length || canAutomation)"
-        v-model="account"
-        allow-all
-        class="acc-filter"
-      />
-    </div>
-
-    <div v-if="stats.length" class="stats">
-      <div v-for="s in stats" :key="s.label" class="stat lc-card">
-        <div class="stat-icon" :class="s.tone">
-          <el-icon :size="20"><component :is="s.icon" /></el-icon>
-        </div>
-        <div class="stat-value">{{ s.value }}</div>
-        <div class="stat-label">{{ s.label }}</div>
+      <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
+      <div class="controls">
+        <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
+        <template v-if="canAnalytics">
+          <el-segmented v-model="days" :options="ranges.map((r) => ({ label: r.label, value: r.v }))" />
+          <el-segmented
+            v-model="tableView"
+            :options="[
+              { label: '圖表', value: false },
+              { label: '表格', value: true },
+            ]"
+          />
+        </template>
       </div>
     </div>
 
-    <router-link
-      v-if="canAutomation && openReviews != null"
-      :to="{ name: 'automation', query: { tab: 'reviews' } }"
-      class="reviews lc-card"
-      :class="{ empty: openReviews === 0 }"
-    >
-      <div class="stat-icon rose">
-        <el-icon :size="18"><EditPen /></el-icon>
-      </div>
-      <div class="rv-body">
-        <div class="rv-title">待改進問答 {{ openReviews }} 則</div>
-        <div class="rv-desc">
-          {{ openReviews ? 'AI 答錯或沒把握的問題，補進知識庫後 AI 會更準' : '目前沒有待處理的問答' }}
+    <StatusPanel />
+
+    <div v-if="tiles.length || showCounts" class="tiles">
+      <div v-for="t in tiles" :key="t.label" class="tile lc-card">
+        <div class="t-label">{{ t.label }}</div>
+        <div class="t-value">{{ t.value }}</div>
+        <div class="t-foot">
+          <span v-if="t.d != null" class="t-delta" :class="(t.d >= 0) === t.upIsGood ? 'good' : 'bad'">
+            {{ t.d >= 0 ? '▲' : '▼' }} {{ Math.abs(Math.round(t.d * 100)) }}%
+          </span>
+          <span v-if="t.d != null" class="vs">{{ vsLabel }}</span>
         </div>
+        <div v-if="t.sub" class="t-sub">{{ t.sub }}</div>
       </div>
-      <el-icon class="rv-arrow"><ArrowRight /></el-icon>
+      <router-link v-if="canSchedule" :to="{ name: 'schedule' }" class="tile lc-card link-tile">
+        <div class="t-label"><el-icon><Calendar /></el-icon>待發排程</div>
+        <div class="t-value">{{ upcoming == null ? '—' : upcoming }}</div>
+        <el-icon class="t-arrow"><ArrowRight /></el-icon>
+      </router-link>
+      <router-link
+        v-if="canAutomation"
+        :to="{ name: 'automation', query: { tab: 'reviews' } }"
+        class="tile lc-card link-tile"
+        :class="{ hot: !!openReviews }"
+      >
+        <div class="t-label"><el-icon><EditPen /></el-icon>待改進問答</div>
+        <div class="t-value">{{ openReviews == null ? '—' : openReviews }}</div>
+        <el-icon class="t-arrow"><ArrowRight /></el-icon>
+      </router-link>
+    </div>
+
+    <router-link v-if="canAnalytics && unanswered > 0 && auth.can('inbox')" :to="{ name: 'inbox' }" class="notice">
+      {{ unanswered }} 個顧客回合還沒回覆
+      <el-icon><ArrowRight /></el-icon>
     </router-link>
 
-    <div v-if="steps.length" class="onboard lc-card">
-      <h3>開始設定</h3>
-      <ol>
-        <li v-for="(st, i) in steps" :key="st.title">
-          <span class="num">{{ i + 1 }}</span>
-          <div>
-            <div class="st-title">{{ st.title }}</div>
-            <div class="st-desc">{{ st.desc }}</div>
-          </div>
-        </li>
-      </ol>
-    </div>
+    <template v-if="canAnalytics">
+      <div class="grid">
+        <DigestCard :filter="account" class="card-digest" />
+
+        <template v-if="data">
+          <section class="card lc-card">
+            <header><h3>每日訊息</h3></header>
+            <ColumnChart
+              :key="`c${days}`"
+              :categories="dailyCats"
+              :short-labels="dailyShort"
+              :series="[{ key: 'in', label: '顧客訊息', color: C_SINGLE, values: data.daily.map((d) => d.inbound) }]"
+              :show-table="tableView"
+              description="每日顧客訊息數長條圖"
+            />
+          </section>
+
+          <section class="card lc-card">
+            <header>
+              <h3>每日回覆：自動 vs 真人<HelpTip text="自動＝關鍵字規則＋AI；真人＝後台手動回覆。" /></h3>
+            </header>
+            <ColumnChart
+              :key="`c${days}`"
+              :categories="dailyCats"
+              :short-labels="dailyShort"
+              :series="[
+                { key: 'auto', label: '自動回覆（規則＋AI）', color: C_AUTO, values: data.daily.map((d) => d.auto) },
+                { key: 'human', label: '真人', color: C_HUMAN, values: data.daily.map((d) => d.human) },
+              ]"
+              :show-table="tableView"
+              :page-size="6"
+              description="每日店家回覆數堆疊長條圖，分自動與真人"
+            />
+          </section>
+
+          <section class="card lc-card">
+            <header>
+              <h3>顧客在問什麼<HelpTip text="AI 回覆時判斷的訊息意圖；只有 AI 處理過的訊息才有分類。" /></h3>
+            </header>
+            <BarList :key="`b${days}`" :items="intentItems" :color="C_SINGLE" empty-text="還沒有意圖資料" />
+          </section>
+
+          <section class="card lc-card">
+            <header>
+              <h3>訊息時段</h3>
+              <span v-if="busiest != null" class="peak">高峰 {{ busiest }}:00</span>
+            </header>
+            <ColumnChart
+              :key="`c${days}`"
+              :categories="data.hours.map((_, h) => `${h}:00–${h + 1}:00`)"
+              :short-labels="data.hours.map((_, h) => `${h}`)"
+              :series="[{ key: 'h', label: '顧客訊息', color: C_SINGLE, values: data.hours }]"
+              :height="150"
+              :show-table="tableView"
+              description="一天 24 小時的顧客訊息分布長條圖"
+            />
+          </section>
+
+          <section class="card lc-card">
+            <header>
+              <h3>最常命中的關鍵字規則<HelpTip text="累計命中次數（不受期間篩選影響）。" /></h3>
+            </header>
+            <BarList
+              :key="`r${days}`"
+              :items="data.topRules.map((r) => ({ label: r.name, value: r.hitCount }))"
+              :color="C_SINGLE"
+              empty-text="還沒有規則被命中"
+            />
+          </section>
+        </template>
+      </div>
+
+      <section v-if="showPosts" v-loading="postsLoading" class="card lc-card posts-card">
+        <header>
+          <h3>
+            貼文成效
+            <HelpTip text="期間內已發佈的貼文，依互動數（按讚＋留言＋收藏＋分享；限動為回覆＋分享）排序，最多 10 篇。發佈後會自動更新數據，也可到「排程」按「更新數據」。" />
+          </h3>
+          <span v-if="pendingPosts" class="peak">{{ pendingPosts }} 篇尚無數據</span>
+        </header>
+        <el-table v-if="rankedPosts.length" :data="rankedPosts" size="small" class="post-table">
+          <el-table-column label="貼文" min-width="220">
+            <template #default="{ row }">
+              <div class="pc">
+                <img v-if="row.thumb" :src="row.thumb" alt="" />
+                <span v-else class="ph">{{ row.kind }}</span>
+                <div class="pc-text">
+                  <span class="pc-cap">{{ row.caption }}</span>
+                  <span class="pc-sub">{{ row.date }} · {{ row.kind }}</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="views" label="觀看" width="80" align="right" />
+          <el-table-column prop="reach" label="觸及" width="80" align="right" />
+          <el-table-column prop="likes" label="按讚" width="76" align="right" />
+          <el-table-column prop="comments" label="留言" width="76" align="right" />
+          <el-table-column prop="saved" label="收藏" width="76" align="right" />
+          <el-table-column prop="shares" label="分享" width="76" align="right" />
+          <el-table-column prop="total" label="互動" width="84" align="right" />
+        </el-table>
+        <div v-else-if="!postsLoading" class="posts-empty">這段期間沒有已取得成效的貼文</div>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -126,145 +347,213 @@ const steps = computed(() =>
 .head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 16px;
+  .lc-page-title {
+    margin: 0;
+  }
 }
 .acc-filter {
   width: 170px;
 }
-.stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
-}
-.stat {
-  padding: 18px;
-}
-.stat-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  margin-bottom: 14px;
-  &.caramel {
-    background: var(--lc-tone-caramel-bg);
-    color: var(--lc-tone-caramel-fg);
-  }
-  &.roast {
-    background: var(--lc-tone-roast-bg);
-    color: var(--lc-roast);
-  }
-  &.sage {
-    background: var(--lc-tone-sage-bg);
-    color: var(--lc-tone-sage-fg);
-  }
-  &.rose {
-    background: var(--lc-tone-rose-bg);
-    color: var(--lc-tone-rose-fg);
-  }
-}
-.stat-value {
-  font-size: 26px;
-  font-weight: 700;
-}
-.stat-label {
-  margin-top: 2px;
-  font-size: 13px;
-  color: var(--lc-muted);
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.reviews {
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.tile {
+  padding: 16px 18px;
+  min-width: 0;
+}
+.t-label {
+  font-size: 13px;
+  color: var(--lc-muted);
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
+  gap: 6px;
+}
+.t-value {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 4px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+.t-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-height: 18px;
+}
+.t-delta {
+  font-weight: 700;
+  &.good {
+    color: var(--lc-delta-good);
+  }
+  &.bad {
+    color: var(--lc-delta-bad);
+  }
+}
+.vs {
+  color: var(--lc-muted);
+}
+.t-sub {
+  font-size: 12px;
+  color: var(--lc-muted);
+  margin-top: 4px;
+}
+.link-tile {
+  position: relative;
   color: inherit;
   text-decoration: none;
   transition: background 0.12s;
-  .stat-icon {
-    margin-bottom: 0;
-    flex-shrink: 0;
-  }
   &:hover {
     background: var(--lc-bg-hover);
   }
-  &.empty .rv-title {
-    color: var(--lc-muted);
+  &.hot .t-value {
+    color: var(--lc-tone-rose-fg);
   }
 }
-.rv-body {
-  flex: 1;
-  min-width: 0;
-}
-.rv-title {
-  font-weight: 600;
-}
-.rv-desc {
-  font-size: 13px;
-  color: var(--lc-muted);
-  margin-top: 2px;
-}
-.rv-arrow {
+.t-arrow {
+  position: absolute;
+  right: 14px;
+  top: 16px;
   color: var(--lc-muted);
 }
 
-.onboard {
-  padding: 20px 22px;
-  h3 {
-    margin: 0 0 14px;
-    font-size: 16px;
-  }
-  ol {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 14px;
-  }
-  li {
+.notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background: var(--lc-warn-bg);
+  color: var(--lc-warn-fg);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.card-digest {
+  grid-column: 1 / -1;
+}
+.card {
+  padding: 16px 18px 18px;
+  min-width: 0;
+  // 圖表卡片固定高度：表格／清單太多列時在卡片內分頁，不撐高卡片（貼文成效表格另計）
+  &:not(.posts-card) {
+    height: 360px;
     display: flex;
-    gap: 14px;
-    align-items: flex-start;
+    flex-direction: column;
+    overflow: hidden;
+    > :last-child {
+      flex: 1;
+      min-height: 0;
+    }
   }
-  .num {
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+.peak {
+  font-size: 12px;
+  color: var(--lc-muted);
+  white-space: nowrap;
+}
+.posts-card {
+  margin-top: 14px;
+}
+.post-table {
+  width: 100%;
+}
+.pc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  img,
+  .ph {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    object-fit: cover;
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
+  }
+  .ph {
     display: grid;
     place-items: center;
-    font-size: 13px;
-    font-weight: 700;
-    background: var(--lc-num-bg);
-    color: var(--lc-num-fg);
-  }
-  .st-title {
-    font-weight: 500;
-  }
-  .st-desc {
-    font-size: 13px;
-    color: var(--lc-muted);
-    margin-top: 2px;
+    background: var(--lc-cream);
+    font-size: 10px;
   }
 }
-
-@media (max-width: 1024px) {
-  .stats {
-    grid-template-columns: repeat(2, 1fr);
+.pc-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pc-cap {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-sub {
+  font-size: 12px;
+  color: var(--lc-muted);
+}
+.posts-empty {
+  padding: 18px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lc-muted);
+}
+@media (max-width: 1100px) {
+  .grid {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 768px) {
-  .stats {
-    gap: 12px;
+  .head {
+    flex-direction: column;
+    align-items: stretch;
+    .lc-page-title {
+      display: none;
+    }
   }
-  .stat {
-    padding: 14px;
+  .acc-filter {
+    width: 100%;
   }
-  .stat-value {
+  .tiles {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .tile {
+    padding: 12px 14px;
+  }
+  .t-value {
     font-size: 22px;
   }
 }

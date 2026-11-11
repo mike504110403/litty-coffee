@@ -12,8 +12,11 @@ stage: mvp
 - IG：官方 Instagram API with Unified Login（Facebook 登入的「配置」；官方建議新整合採用的設定），可同時連多個 IG 專業帳號；開發期用模擬器假造 webhook
 - 前端：Vue 3＋TS＋Vite＋Element Plus＋Pinia＋vue-router；`frontend/`；用 npm（pnpm 在 Node 20 上會壞）
 - i18n：只做繁中，不掛 vue-i18n（單一店家）
-- 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner）
-- 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, ig_accounts, credentials, admins, audit）；店長全權。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
+- 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner；有超管不影響，只看非超管是否存在）
+- 超管（`is_super`）：位階在店長之上；IG 帳號連結（`/api/settings`、`/api/ig/oauth/*`、`/api/ig/connections/*`、`/api/ig/accounts/{id}/*` 寫入）與憑證（`/api/settings/credentials*`）只限超管（`auth.RequireSuper`）；`GET /api/ig/accounts` 仍所有登入者可讀。超管可管理所有人（含店長），只有超管能建立／變更超管、重設 GA；最後一位啟用中的超管不能停用或降級；一律可見全部帳號
+- 預設超管：migration 00016 建 `superAdmin`／`admin123`（Mike 2026-11-12 裁示：repo 公開、密碼在 repo 內，接受此風險；緩解＝首次登入鎖定：改密碼＋綁 GA 前，除 `/auth/me`、改密碼、綁 GA、登出外一律 403 `setup_required`，含 SSE）
+- GA 兩步驟登入（`internal/auth/totp.go`，pquerna/otp）：超管必綁、其他人可自選（頭像選單）；已綁定者密碼正確只拿到待驗證碼 cookie `litty_mfa`（5 分鐘、一次性、另一把簽章鑰匙），`POST /api/auth/totp` 驗 6 位數（±1 時間步、同步不重用）或備援碼（8 組、只存雜湊、一次性）才換正式 session；錯碼每帳號 5 分鐘 5 次後 429；secret 以 `internal/secrets` 加密（AAD 綁管理員 id）；超管可重設別人的 GA（被重設的超管立即登出、要重綁）。前端 `/setup` 三步驟（改密碼→掃 QR→備援碼）
+- 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, admins, audit；ig_accounts、credentials 自 00016 起超管專屬、不可授予）；店長全權（超管專屬除外）。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
 - 可見帳號（安全邊界）：`admin_users.ig_account_ids`（NULL＝全部；店長一律全部），見 `internal/auth/scope.go`、`internal/httpapi/scope.go`。清單類 API 用 `?account=` 過濾，範圍外 403；單筆資源（對話、附件、顧客、貼文…）範圍外一律 404；自動回覆、上傳、AI 文案、模擬器必須指定帳號；連線層級（連結、同步、斷開）只限可見全部帳號的人；只看部分帳號的人只能授予自己看得到的帳號、不能授予「全部」
 - 真人回覆記錄 `messages.sent_by_admin_id`，收件匣顯示回覆者名字
 - 處理流程：webhook 先落 `webhook_events`，再由背景處理器依序走規則 → AI → 送出
@@ -95,7 +98,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 設定頁：依連線列出全部帳號（頭像、名稱、啟用狀態、私訊訂閱、連線到期）。每個帳號可「停用／啟用」（停用＝webhook 拒收、不送訊不發文，資料保留）、「重試訂閱」；每個連線可「同步帳號」（`POST /api/ig/connections/{id}/refresh`）、「重新連結」、「斷開連線」（只刪 token，帳號、顧客、對話保留）
 - 帳號清單 `GET /api/ig/accounts`：所有登入者可用，只回可見帳號（各頁的帳號篩選／選擇器用）
 - 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上兩個模擬帳號 `dev-litty-coffee`、`dev-litty-roastery`
-- 改密碼：`POST /api/auth/password`，自己目前的 session 不撤銷
+- 改密碼：`POST /api/auth/password`，自己目前的 session 不撤銷；新密碼不能與目前相同；改完清掉「必須改密碼」
 
 ## 憑證（後台可設定）
 
@@ -123,6 +126,14 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - API（`audit` 權限「操作紀錄」）：`GET /api/audit-logs?admin=&action=&from=&to=&account=&page=&pageSize=`（from/to 收 RFC3339 或 YYYY-MM-DD；只看部分帳號的人只看得到自己帳號的與不屬於帳號的紀錄，`?account=` 範圍外 403）、`GET /api/audit-logs/actions`（篩選下拉）、`GET /api/audit-logs/admins`（管理員下拉）
 - 前端：`views/admins/AuditLogPanel.vue`、`api/audit.ts`
 - IP 取 `X-Forwarded-For` 第一個（反向代理後），否則 RemoteAddr；未在代理後面時可被偽造
+
+## 總覽（監控＋分析合併）、每日摘要、AI 建議回覆
+
+- 「分析」已併入總覽（`/analytics` 轉 `/dashboard`）；頁面不放說明段落，必要說明用 `components/HelpTip.vue` 的 `?`
+- 系統狀態：`internal/monitor` 每 60 秒檢查（每個 IG 帳號的 token／訂閱／最後收到 webhook、Claude key 與最近一次呼叫、webhook 積壓、排程貼文、DB），閾值在 `monitor.go` 開頭；`GET /api/system/status` 依可見帳號過濾；轉紅與恢復時推 `system.alert`（`GET /api/system/stream`，給有 `automation` 權限者＝含店長、超管）；token 失效同時寫連線 `last_error`
+- 自動回覆總開關：`automation_settings.auto_reply_enabled`（依帳號），關閉＝只收不回（不跑規則／AI／降頻／轉真人通知）
+- 每日摘要：`internal/digest`，每帳號在 `automation_settings.digest_time`（預設 09:00，`TZ_STORE`）整理前一天；重要度排序見 `digest/score.go`；AI 摘要只送統計與每則 ≤60 字節錄（輸入 ≤2400 字）；`GET /api/digests/latest`、`POST /api/digests/generate`
+- AI 建議回覆：`POST /api/conversations/{id}/suggest`（inbox 權限、依帳號範圍、每人每分鐘 10 次）；只把草稿放進輸入框、絕不自動送出；顧客訊息以 `<conversation>` 資料區塊包裝防注入；操作紀錄不記草稿；呼叫計入 Claude 狀態
 
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 

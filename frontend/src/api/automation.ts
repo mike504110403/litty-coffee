@@ -32,6 +32,8 @@ export interface AutoSettings {
   spamMaxMsgs: number // 大量訊息門檻：spamWindowSecs 秒內超過幾則就自動列入黑名單；0＝關閉
   spamWindowSecs: number
   aiModeration: boolean // AI 判斷騷擾／惡意，是就自動列入黑名單
+  autoReplyEnabled: boolean // 自動回覆總開關：關閉＝只收不回（不跑規則、AI、轉真人通知）
+  digestTime: string // 每日摘要產生時間（店家時區 HH:MM）
 }
 
 export interface AIDecision {
@@ -77,6 +79,9 @@ export const automationApi = {
   settings: (account: number) => http.get<AutoSettings>('/automation/settings', acc(account)).then((r) => r.data),
   saveSettings: (account: number, s: AutoSettings) =>
     http.put<AutoSettings>('/automation/settings', s, acc(account)).then((r) => r.data),
+  // 只切總開關（其他設定不動）
+  setAutoReply: (account: number, enabled: boolean) =>
+    http.put<AutoSettings>('/automation/settings', { autoReplyEnabled: enabled }, acc(account)).then((r) => r.data),
 
   rules: (account: number) => http.get<Rule[]>('/automation/rules', acc(account)).then((r) => r.data),
   createRule: (account: number, r: Omit<Rule, 'id' | 'hitCount' | 'lastHitAt'>) =>

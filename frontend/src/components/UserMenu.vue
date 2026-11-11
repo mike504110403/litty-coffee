@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Key, SwitchButton } from '@element-plus/icons-vue'
+import { Iphone, Key, SwitchButton } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useInboxStore } from '@/stores/inbox'
 import { useThemeStore } from '@/stores/theme'
 import type { NavItem } from '@/router/nav'
 import PasswordDialog from './PasswordDialog.vue'
+import TotpDialog from './TotpDialog.vue'
 
 // 頭像選單：姓名／角色、深色模式、修改密碼、登出。side＝桌機側欄底部、top＝手機頂欄
 const props = defineProps<{ variant: 'side' | 'top'; links?: NavItem[] }>()
@@ -18,10 +19,13 @@ const theme = useThemeStore()
 
 const open = ref(false)
 const pwDialog = ref(false)
+const totpDialog = ref(false)
 
 const name = computed(() => auth.user?.displayName || auth.user?.username || '')
 const initial = computed(() => (name.value || '?').slice(0, 1).toUpperCase())
-const role = computed(() => (auth.user?.isOwner ? '店長' : '管理員'))
+const role = computed(() => (auth.user?.isSuper ? '超管' : auth.user?.isOwner ? '店長' : '管理員'))
+// 一般管理員可自選綁定 GA（超管在首次登入時強制綁；已綁定的要由超管重設）
+const canBindTotp = computed(() => !!auth.user && !auth.user.isSuper && !auth.user.totpEnabled)
 
 function go(n: NavItem) {
   open.value = false
@@ -31,6 +35,11 @@ function go(n: NavItem) {
 function openPassword() {
   open.value = false
   pwDialog.value = true
+}
+
+function openTotp() {
+  open.value = false
+  totpDialog.value = true
 }
 
 async function onLogout() {
@@ -87,6 +96,9 @@ async function onLogout() {
       <button type="button" class="item" @click="openPassword">
         <el-icon><Key /></el-icon>修改密碼
       </button>
+      <button v-if="canBindTotp" type="button" class="item" @click="openTotp">
+        <el-icon><Iphone /></el-icon>綁定 Google Authenticator
+      </button>
       <button type="button" class="item danger" @click="onLogout">
         <el-icon><SwitchButton /></el-icon>登出
       </button>
@@ -94,6 +106,7 @@ async function onLogout() {
   </el-popover>
 
   <PasswordDialog v-model="pwDialog" />
+  <TotpDialog v-model="totpDialog" />
 </template>
 
 <style scoped lang="scss">

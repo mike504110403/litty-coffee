@@ -17,6 +17,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Post("/admins", s.createAdmin)
 	r.Patch("/admins/{id}", s.updateAdmin)
 	r.Post("/admins/{id}/password", s.resetAdminPassword)
+	r.Post("/admins/{id}/totp/reset", s.resetAdminTOTP) // 超管專屬（auth.ResetTOTP 把關）
 }
 
 func (s *Server) adminErr(w http.ResponseWriter, err error) {
@@ -44,6 +45,20 @@ func (s *Server) listAdmins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"admins": list, "permissions": auth.AllPerms})
+}
+
+func (s *Server) resetAdminTOTP(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	actor, _ := auth.CurrentUser(r.Context())
+	if err := s.Auth.ResetTOTP(r.Context(), actor, id); err != nil {
+		s.adminErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) createAdmin(w http.ResponseWriter, r *http.Request) {

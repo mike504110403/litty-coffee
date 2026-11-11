@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Promotion, Check, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
-import { contactLabel, riskSourceLabels, throttleMinutes, type Conversation, type Message } from '@/api/inbox'
+import { contactLabel, inboxApi, riskSourceLabels, throttleMinutes, type Conversation, type Message, type Suggestion } from '@/api/inbox'
 import { flagsApi, type RiskResult } from '@/api/flags'
 import ContactAvatar from '@/components/ContactAvatar.vue'
 import AccountTag from '@/components/AccountTag.vue'
@@ -130,6 +130,7 @@ async function submit() {
   try {
     await props.sendFn(text)
     draft.value = ''
+    aiDraft.value = null
     await toBottom()
   } catch {
     // 錯誤由 http 攔截器提示；保留草稿讓使用者重送
@@ -137,6 +138,105 @@ async function submit() {
     sending.value = false
   }
 }
+
+// --- AI 建議回覆：只把草稿放進輸入框，送出一律由人按 ---
+const AUTO_KEY = 'lc-ai-suggest-auto' // 每個瀏覽器各自記；預設開
+function loadAuto() {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+const aiConfigured = ref(false)
+const autoSuggest = ref(loadAuto())
+watch(autoSuggest, (v) => {
+  try {
+    localStorage.setItem(AUTO_KEY, v ? '1' : '0')
+  } catch {
+    // 無痕模式等寫不進去：只在這次有效
+  }
+})
+const suggesting = ref(false)
+const aiDraft = ref<Suggestion | null>(null)
+// 輸入框還是原封不動的 AI 草稿時才顯示標籤與警示；一改字或送出就消失
+const showDraftTag = computed(() => !!aiDraft.value && draft.value === aiDraft.value.text)
+let suggestSeq = 0 // 換對話或重新要求時，舊的回應作廢
+const autoTried = new Set<number>()
+
+onMounted(async () => {
+  try {
+    aiConfigured.value = (await inboxApi.aiStatus()).configured
+  } catch {
+    // 查不到就當沒設定：不顯示按鈕
+  }
+})
+
+async function runSuggest(auto: boolean) {
+  const convId = props.conversation.id
+  const seq = ++suggestSeq
+  const snapshot = draft.value
+  suggesting.value = true
+  try {
+    const r = await inboxApi.suggest(convId, auto)
+    if (!r || seq !== suggestSeq || convId !== props.conversation.id) return
+    if (draft.value !== snapshot) {
+      // 等待期間輸入框被改過：不覆蓋使用者打的字
+      if (!auto) ElMessage.info('輸入框內容已變動，已略過 AI 建議')
+      return
+    }
+    draft.value = r.text
+    aiDraft.value = r
+  } catch {
+    // 錯誤由 http 攔截器提示
+  } finally {
+    if (seq === suggestSeq) suggesting.value = false
+  }
+}
+
+async function onSuggestClick() {
+  if (suggesting.value || !canSend.value) return
+  // 已有自己打的字（不是原封不動的 AI 草稿）→ 先問要不要取代
+  if (draft.value.trim() && !showDraftTag.value) {
+    try {
+      await ElMessageBox.confirm('輸入框已經有內容，要用 AI 建議取代嗎？', '取代輸入框內容', {
+        confirmButtonText: '取代',
+        cancelButtonText: '保留我的',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  await runSuggest(false)
+}
+
+// 開啟「真人」處理、最後一則是顧客的對話，輸入框又是空的 → 自動擬一份放進去（不送出）
+function maybeAutoSuggest() {
+  const c = props.conversation
+  if (!autoSuggest.value || !aiConfigured.value || suggesting.value) return
+  if (c.handler !== 'human' || !canSend.value || !props.messages) return
+  const last = props.messages[props.messages.length - 1]
+  if (!last || last.direction !== 'in' || last.deleted) return
+  if (draft.value.trim() || autoTried.has(c.id)) return
+  autoTried.add(c.id)
+  void runSuggest(true)
+}
+watch(
+  () => props.conversation.id,
+  () => {
+    suggestSeq++ // 作廢上一段對話還在路上的建議
+    suggesting.value = false
+    autoTried.clear()
+    if (showDraftTag.value) draft.value = '' // 沒動過的 AI 草稿不帶到別的對話
+    aiDraft.value = null
+  },
+)
+watch(
+  [() => props.conversation.id, () => props.messages !== undefined, () => props.conversation.handler, aiConfigured, autoSuggest],
+  maybeAutoSuggest,
+  { immediate: true },
+)
 
 // --- 標記「回答有誤」（只限 AI／規則的自動回覆） ---
 const isAutoReply = (m: Message) => m.direction === 'out' && (m.senderType === 'ai' || m.senderType === 'bot') && !m.deleted
@@ -288,6 +388,34 @@ const handler = computed({
       <div class="window" :class="windowState.kind">
         {{ windowState.text }}
         <HelpTip v-if="conversation.handler === 'bot'" text="送出訊息後會自動切成「真人」，AI 暫停回覆這位顧客。" />
+      </div>
+      <div v-if="aiConfigured" class="ai-bar">
+        <el-button size="small" round :loading="suggesting" :disabled="!canSend" @click="onSuggestClick">
+          <template #icon>
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true">
+              <path d="M10 2l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z" />
+              <path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" />
+            </svg>
+          </template>
+          AI 建議
+        </el-button>
+        <HelpTip :width="230">
+          <label class="auto-row"><el-switch v-model="autoSuggest" size="small" />開啟對話時自動擬稿</label>
+          <div class="auto-sub">草稿只放進輸入框，不會自動送出。</div>
+        </HelpTip>
+        <template v-if="showDraftTag && aiDraft">
+          <span class="ai-tag">AI 草稿，送出前請確認</span>
+          <HelpTip v-if="aiDraft.basis.length" :width="240">
+            參考的知識庫：
+            <ul class="basis">
+              <li v-for="b in aiDraft.basis" :key="b">{{ b }}</li>
+            </ul>
+          </HelpTip>
+        </template>
+      </div>
+      <div v-if="showDraftTag && aiDraft?.warning" class="ai-warn" role="status">
+        <el-icon><WarningFilled /></el-icon>
+        <span>{{ aiDraft.warning }}</span>
       </div>
       <div class="composer">
         <el-input
@@ -586,6 +714,54 @@ const handler = computed({
   &.closed {
     color: var(--lc-tone-rose-fg);
   }
+}
+.ai-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 4px 8px;
+  :deep(.help-tip) {
+    margin-left: 0;
+  }
+}
+.ai-tag {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--lc-tone-sage-bg);
+  color: var(--lc-tone-sage-fg);
+}
+.ai-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 4px 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--lc-warn-bg);
+  color: var(--lc-warn-fg);
+  .el-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+}
+.auto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.auto-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--lc-muted);
+}
+.basis {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }
 .composer {
   display: flex;
