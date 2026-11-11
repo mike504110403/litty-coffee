@@ -163,6 +163,7 @@ func systemPrompt(st Settings, kb []Knowledge) string {
 	if n == 0 {
 		b.WriteString("\n（店家尚未填寫任何資料：除了打招呼之外一律 handoff。）\n")
 	}
+	b.WriteString(postsRefSection(st.RecentPosts, postsRulesDecide))
 	return b.String()
 }
 
@@ -262,8 +263,8 @@ var captionSchema = map[string]any{
 	"additionalProperties": false,
 }
 
-// Caption 依店家資料、店家的一句說明與貼文圖片，直接寫出一版可用的 IG 文案（不反問、不留待填處）。
-func (a *AI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, kind string, images []CaptionImage) (string, error) {
+// CaptionSystemPrompt 組寫文案的 system prompt：該帳號的語氣、店家資料與近期貼文（st.RecentPosts）。
+func CaptionSystemPrompt(st Settings, kb []Knowledge) string {
 	var b strings.Builder
 	b.WriteString(`你在替一間咖啡廳寫 Instagram 貼文文案。
 
@@ -288,6 +289,12 @@ func (a *AI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, ki
 			fmt.Fprintf(&b, "\n### %s\n%s\n", k.Title, strings.TrimSpace(k.Content))
 		}
 	}
+	b.WriteString(postsRefSection(st.RecentPosts, postsRulesCaption))
+	return b.String()
+}
+
+// Caption 依店家資料、店家的一句說明與貼文圖片，直接寫出一版可用的 IG 文案（不反問、不留待填處）。
+func (a *AI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, kind string, images []CaptionImage) (string, error) {
 	kindLabel := map[string]string{"image": "單張圖片貼文", "carousel": "多張輪播貼文", "reel": "Reels 短影音", "story": "限時動態"}[kind]
 	text := fmt.Sprintf("貼文類型：%s\n附圖：%d 張（依發佈順序）\n", kindLabel, len(images))
 	if strings.TrimSpace(brief) != "" {
@@ -304,7 +311,7 @@ func (a *AI) Caption(ctx context.Context, st Settings, kb []Knowledge, brief, ki
 	resp, err := a.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(a.Model),
 		MaxTokens: 4000,
-		System:    []anthropic.BetaTextBlockParam{{Text: WithGuard(b.String())}},
+		System:    []anthropic.BetaTextBlockParam{{Text: WithGuard(CaptionSystemPrompt(st, kb))}},
 		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)},
 		OutputConfig: anthropic.BetaOutputConfigParam{
 			Effort: anthropic.BetaOutputConfigEffort(a.Effort),

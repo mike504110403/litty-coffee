@@ -38,6 +38,7 @@ type Server struct {
 	Analytics *analytics.Service
 	Media     *media.Store
 	Posts     *posts.Service
+	MediaSync *posts.MediaSyncer // IG 貼文同步（手動同步 API）；nil＝503
 	CaptionAI *automation.LiveAI // 與 Auto.AI 同一個；Enabled()＝false 表示沒設 key
 	Creds     *appsettings.Store // 後台可改的憑證（DB 優先於 .env）
 	// AnthropicBaseURL 非空時 test-ai 改打這個網址（測試用 httptest；正式留空＝官方 API）

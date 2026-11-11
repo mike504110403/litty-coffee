@@ -13,7 +13,7 @@ stage: mvp
 - 前端：Vue 3＋TS＋Vite＋Element Plus＋Pinia＋vue-router；`frontend/`；用 npm（pnpm 在 Node 20 上會壞）
 - i18n：只做繁中，不掛 vue-i18n（單一店家）
 - 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner；有超管不影響，只看非超管是否存在）
-- 超管（`is_super`）：位階在店長之上；IG 帳號連結（`/api/settings`、`/api/ig/oauth/*`、`/api/ig/connections/*`、`/api/ig/accounts/{id}/*` 寫入）與憑證（`/api/settings/credentials*`）只限超管（`auth.RequireSuper`）；`GET /api/ig/accounts` 仍所有登入者可讀。超管可管理所有人（含店長），只有超管能建立／變更超管、重設 GA；最後一位啟用中的超管不能停用或降級；一律可見全部帳號
+- 超管（`is_super`）：位階在店長之上；IG 帳號連結（`/api/settings`、`/api/ig/oauth/*`、`/api/ig/connections/*`、`/api/ig/accounts/{id}/*` 寫入；`sync-media` 除外，見貼文排程）與憑證（`/api/settings/credentials*`）只限超管（`auth.RequireSuper`）；`GET /api/ig/accounts` 仍所有登入者可讀。超管可管理所有人（含店長），只有超管能建立／變更超管、重設 GA；最後一位啟用中的超管不能停用或降級；一律可見全部帳號
 - 預設超管：migration 00016 建 `superAdmin`／`admin123`（Mike 2026-11-12 裁示：repo 公開、密碼在 repo 內，接受此風險；緩解＝首次登入鎖定：改密碼＋綁 GA 前，除 `/auth/me`、改密碼、綁 GA、登出外一律 403 `setup_required`，含 SSE）
 - GA 兩步驟登入（`internal/auth/totp.go`，pquerna/otp）：超管必綁、其他人可自選（頭像選單）；已綁定者密碼正確只拿到待驗證碼 cookie `litty_mfa`（5 分鐘、一次性、另一把簽章鑰匙），`POST /api/auth/totp` 驗 6 位數（±1 時間步、同步不重用）或備援碼（8 組、只存雜湊、一次性）才換正式 session；錯碼每帳號 5 分鐘 5 次後 429；secret 以 `internal/secrets` 加密（AAD 綁管理員 id）；超管可重設別人的 GA（被重設的超管立即登出、要重綁）。前端 `/setup` 三步驟（改密碼→掃 QR→備援碼）
 - 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, admins, audit；ig_accounts、credentials 自 00016 起超管專屬、不可授予）；店長全權（超管專屬除外）。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
@@ -87,6 +87,12 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 發佈 token：貼文帳號所屬連線的 token（`account.Service.Credentials`），IG 帳號 ID 直接讀 `ig_accounts.ig_user_id`（系統用戶 token 的 `/me` 不是 IG 帳號，不打）；帳號沒掛連線才用 `IG_ACCESS_TOKEN` 兜底；停用的帳號不發（DEV_SIMULATOR=1 時走 `ig.FakePublisher`，token 一樣來自模擬連線）
 - AI 寫文案：`POST /api/posts/caption`（body `account` 必填），用該帳號自動回覆的人設與知識庫
 - 成效（Insights）：用貼文帳號的 token；`posts.InsightsRefresher` 每 15 分掃一次，只更新近 30 天已發佈的；未滿 7 天每 6 小時、之後每天；限動只在 24 小時內。指標：貼文／輪播／Reels＝views, reach, likes, comments, saved, shares；限動＝views, reach, replies, shares（`impressions` 已棄用）。手動 `POST /api/posts/{id}/insights/refresh`。需 `instagram_manage_insights` 權限（配置裡加權限後要重新連結）
+- IG 貼文同步（`posts.MediaSyncer`，`internal/posts/sync.go`）：帳號上不是從後台發的貼文／輪播／Reels／限動寫進 `scheduled_posts`（`source='ig'`、status＝published、`scheduled_at`＝`published_at`＝IG 時間）；貼文每 6 小時（第一次抓最近 200 篇，之後從上次同步往回 30 天）、限動每 30 分鐘；每個啟用中帳號、單一帳號失敗不影響其他，token 失效走 `NoteAPIError`
+- 類型映射：`media_product_type` STORY→story、REELS→reel；`media_type` CAROUSEL_ALBUM→carousel；其他→image。後台發的（已有 `ig_media_id`）同步到時只更新文案（以 IG 為準）與連結；中斷復原沒有 media id 的，以同類型＋同文案＋±2 小時認領；同帳號同 media 只一筆（部分唯一索引）
+- 縮圖：下載到 `MEDIA_DIR`（`ig-` 開頭檔名，不進 `media_assets`），清單回 `igThumb`＝`/media/{檔名}`；IG CDN 網址會過期所以不存網址。限動同步進來當下抓一次成效，其餘照 `InsightsRefresher`
+- `source='ig'` 唯讀：改內容／排程／刪除 409；只能切 `PATCH /api/posts/{id}/ai-exclude`（body `{aiExclude}`，兩種來源都可）與手動更新成效。清單可 `?source=app|ig`
+- 手動同步 `POST /api/ig/accounts/{id}/sync-media`：排程權限＋帳號可見（範圍外、不存在 404），回 `{posts,stories}`（本次處理篇數）；每帳號 1 分鐘冷卻 429＋Retry-After。模擬模式 `ig.FakePublisher` 給每個帳號 3 篇假貼文＋1 則假限動、縮圖現場產生
+- AI 參考近期貼文（`automation/postsref.go`）：`automation_settings.posts_kb_enabled`（預設開）時，自動回覆／建議回覆／寫文案／蒸餾的 system prompt 末尾加「近期 IG 貼文」`<data>` 區塊：該帳號最近 30 篇已發佈、未排除、有文案的（兩種來源、含限動），每篇 `[日期｜類型]`、文案經 `Untrusted(…,300)`、整段 ≤6000 字從舊的丟；只用文案不送圖。規則：貼文可能過期，活動／優惠只當「某日曾公告」、不得說成仍有效，不確定就轉真人／寫「確認一下再回覆您」，不得引用網址。排序固定、不放今天日期（prompt cache 穩定）
 
 ## 設定頁／IG 帳號連結
 

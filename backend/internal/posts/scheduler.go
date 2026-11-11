@@ -65,8 +65,8 @@ func (sc *Scheduler) RunOnce(ctx context.Context, now time.Time) (done bool, err
 UPDATE scheduled_posts SET status = 'publishing', locked_at = $1, attempts = attempts + 1, updated_at = now()
 WHERE id = (
   SELECT id FROM scheduled_posts
-  WHERE (status = 'scheduled' AND next_attempt_at <= $1)
-     OR (status = 'publishing' AND locked_at < $1::timestamptz - $2::interval)
+  WHERE source = 'app' AND ((status = 'scheduled' AND next_attempt_at <= $1)
+     OR (status = 'publishing' AND locked_at < $1::timestamptz - $2::interval))
   ORDER BY next_attempt_at NULLS FIRST, id LIMIT 1 FOR UPDATE SKIP LOCKED
 ) RETURNING `+postCols, now, fmt.Sprintf("%d seconds", int(sc.staleAfter().Seconds()))))
 	if errors.Is(err, ErrNotFound) {
@@ -86,12 +86,32 @@ WHERE id = (
 		}
 		return false, sc.fail(ctx, p, perr, now)
 	}
-	_, err = sc.Svc.DB.Exec(ctx, `
-UPDATE scheduled_posts SET status = 'published', ig_media_id = $2, permalink = $3, error = '', published_at = $4,
-  next_attempt_at = NULL, updated_at = now()
-WHERE id = $1`, p.ID, mediaID, permalink, time.Now())
+	err = sc.markPublished(ctx, p, mediaID, permalink)
 	log.Printf("scheduler: post %d published (%s)", p.ID, mediaID)
 	return false, err
+}
+
+// markPublished 寫入發佈結果。若 IG 同步剛好在發佈與寫入之間先把同一則 media 同步成 source='ig' 的一筆，
+// 以後台這筆為準：先刪掉同步的那筆（同帳號同 media 只能一筆），成效等資料之後再由同步／成效更新補上。
+func (sc *Scheduler) markPublished(ctx context.Context, p Post, mediaID, permalink string) error {
+	tx, err := sc.Svc.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if mediaID != "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM scheduled_posts WHERE ig_account_id = $1 AND ig_media_id = $2 AND source = 'ig'`,
+			p.IGAccountID, mediaID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE scheduled_posts SET status = 'published', ig_media_id = $2, permalink = $3, error = '', published_at = $4,
+  next_attempt_at = NULL, updated_at = now()
+WHERE id = $1`, p.ID, mediaID, permalink, time.Now()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (sc *Scheduler) staleAfter() time.Duration {

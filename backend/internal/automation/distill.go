@@ -434,7 +434,8 @@ func kbForPrompt(k Knowledge) (string, bool) {
 
 // DistillSystemPrompt 組 system prompt：任務規則＋「這個帳號」既有的規則與知識庫（含 id，update 建議要指向它）。
 // 顧客素材不放這裡（見 DistillUserMessage）。共用的防注入規則由呼叫端以 WithGuard 加在最前面。
-func DistillSystemPrompt(rules []Rule, kb []Knowledge) string {
+// posts 是近期 IG 貼文（設定關閉時為 nil，整段不出現）。
+func DistillSystemPrompt(rules []Rule, kb []Knowledge, posts []PostRef) string {
 	var b strings.Builder
 	b.WriteString(`你在幫一間咖啡廳整理 Instagram 私訊的自動回覆設定。使用者訊息的 <data> 區塊是這個帳號近期的私訊素材：店員（真人）怎麼回答顧客、哪些自動回覆被標記答錯、AI 沒把握的問題、顧客意圖分布。
 請從中歸納「建議」的關鍵字規則與知識庫條目。建議不會自動生效，店家會逐筆審核、修改後才採用。
@@ -501,6 +502,7 @@ func DistillSystemPrompt(rules []Rule, kb []Knowledge) string {
 		}
 		fmt.Fprintf(&b, "\n### [K%d] %s%s\n%s\n", k.ID, k.Title, tag, content)
 	}
+	b.WriteString(postsRefSection(posts, postsRulesDistill))
 	return b.String()
 }
 
@@ -585,6 +587,7 @@ type DistillInput struct {
 	Rules     []Rule
 	Knowledge []Knowledge
 	Source    DistillSource
+	Posts     []PostRef // 近期 IG 貼文（automation_settings.posts_kb_enabled 關閉時為 nil）
 }
 
 // DistillAI 抽象蒸餾用的 AI，測試時換假的；*LiveAI 實作它。回傳的是模型原始建議，清理由 FinishDistill 負責。
@@ -609,7 +612,7 @@ func (a *AI) Distill(ctx context.Context, in DistillInput) ([]DistillSuggestion,
 		Model:     anthropic.Model(a.Model),
 		MaxTokens: distillMaxTokens,
 		System: []anthropic.BetaTextBlockParam{{
-			Text: WithGuard(DistillSystemPrompt(in.Rules, in.Knowledge)),
+			Text: WithGuard(DistillSystemPrompt(in.Rules, in.Knowledge, in.Posts)),
 		}},
 		Messages: []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(DistillUserMessage(in.Source)))},
 		OutputConfig: anthropic.BetaOutputConfigParam{
@@ -1345,6 +1348,13 @@ func (d *Distiller) execute(ctx context.Context, runID, accountID int64, days in
 	if err != nil {
 		return run, err
 	}
+	set, err := st.GetSettings(ctx, accountID)
+	if err != nil {
+		return run, err
+	}
+	if err := st.LoadRecentPosts(ctx, accountID, &set); err != nil {
+		return run, err
+	}
 	src, err := st.LoadDistillSource(ctx, accountID, days, d.now().Add(-time.Duration(days)*24*time.Hour))
 	if err != nil {
 		return run, err
@@ -1359,7 +1369,7 @@ func (d *Distiller) execute(ctx context.Context, runID, accountID int64, days in
 	actx, cancel := context.WithTimeout(ctx, DistillTimeout)
 	defer cancel()
 	start := time.Now()
-	raw, err := d.AI.Distill(actx, DistillInput{Rules: rules, Knowledge: kb, Source: src})
+	raw, err := d.AI.Distill(actx, DistillInput{Rules: rules, Knowledge: kb, Source: src, Posts: set.RecentPosts})
 	d.Calls.Record("distill", start, err) // nil-safe
 	if err != nil {
 		return run, err

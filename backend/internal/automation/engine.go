@@ -205,6 +205,9 @@ func (e *Engine) Evaluate(ctx context.Context, accountID int64, st Settings, his
 	if err != nil {
 		return Outcome{}, err
 	}
+	if err := e.Store.LoadRecentPosts(ctx, accountID, &st); err != nil {
+		return Outcome{}, err
+	}
 	turns := make([]Turn, 0, len(history))
 	for _, m := range history {
 		turns = append(turns, Turn{FromCustomer: m.Direction == "in", Text: m.Text})

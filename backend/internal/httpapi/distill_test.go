@@ -174,7 +174,7 @@ func TestDistillAssemblesAccountMaterialAndStoresSuggestions(t *testing.T) {
 		t.Errorf("material:\n%s", mat)
 	}
 	// 交給 AI 的既有規則／知識庫只有 A 的
-	sys := automation.DistillSystemPrompt(in.Rules, in.Knowledge)
+	sys := automation.DistillSystemPrompt(in.Rules, in.Knowledge, in.Posts)
 	if !strings.Contains(sys, "A店菜單在精選動態") || !strings.Contains(sys, "A店營業時間") || strings.Contains(sys, "B店") ||
 		strings.Contains(sys, "付費停車場") {
 		t.Fatalf("system prompt:\n%s", sys)

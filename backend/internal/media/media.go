@@ -118,6 +118,26 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
 	return a, err
 }
 
+// SaveThumb 把 IG 同步貼文的縮圖存進 MEDIA_DIR（不進 media_assets、不能拿來發文），回檔名；
+// 經公開的 /media/{檔名} 提供。只收 JPEG／PNG／WebP／GIF（以內容判型）。
+func (s *Store) SaveThumb(data []byte) (string, error) {
+	ext := map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}[http.DetectContentType(data)]
+	if ext == "" {
+		return "", errors.New("縮圖不是圖片")
+	}
+	if len(data) > MaxImageBytes {
+		return "", errors.New("縮圖超過 8MB")
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return "", err
+	}
+	name := "ig-" + randName(ext)
+	if err := os.WriteFile(filepath.Join(s.Dir, name), data, 0o644); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 func hasFtyp(b []byte) bool { return len(b) >= 12 && string(b[4:8]) == "ftyp" }
 
 // QuickTime（.mov）的 ftyp brand 是 "qt  "

@@ -84,11 +84,12 @@ type fakeAI struct {
 	calls     int
 	persona   string      // 最近一次呼叫用的人設
 	kb        []Knowledge // 最近一次呼叫用的知識庫
+	posts     []PostRef   // 最近一次呼叫帶的近期貼文
 }
 
 func (f *fakeAI) Decide(_ context.Context, st Settings, kb []Knowledge, _ []Turn) (AIDecision, error) {
 	f.calls++
-	f.persona, f.kb, f.throttled = st.Persona, kb, st.Throttled
+	f.persona, f.kb, f.throttled, f.posts = st.Persona, kb, st.Throttled, st.RecentPosts
 	return f.d, f.err
 }
 

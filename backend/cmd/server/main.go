@@ -113,6 +113,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("TZ_STORE: %v", err)
 	}
+	engine.Store.Loc = loc // AI 參考貼文的日期用店家時區
 	api.CRM = &crm.Service{DB: pool}
 	api.Analytics = &analytics.Service{DB: pool, Loc: loc}
 
@@ -134,8 +135,10 @@ func main() {
 	}
 
 	var publisher ig.Publisher = ig.NewClient(cfg.IGAPIBase)
+	var mediaLister ig.MediaLister = ig.NewClient(cfg.IGAPIBase)
 	if cfg.DevSimulator {
-		publisher = ig.NewFakePublisher()
+		fakePub := ig.NewFakePublisher() // 模擬帳號另有幾篇假貼文＋一則假限動（同步用）
+		publisher, mediaLister = fakePub, fakePub
 	}
 	scheduler := &posts.Scheduler{Svc: api.Posts, IG: publisher, Creds: api.Accounts.Credentials, OnAPIError: api.Accounts.NoteAPIError}
 	go scheduler.Run(ctx)
@@ -144,6 +147,10 @@ func main() {
 	api.Posts.Insights = &posts.InsightsRefresher{Svc: api.Posts, IG: publisher, Creds: api.Accounts.Credentials,
 		OnAPIError: api.Accounts.NoteAPIError}
 	go api.Posts.Insights.Run(ctx)
+	// IG 貼文同步：帳號上不是從後台發的貼文（含限動）也寫進 scheduled_posts（貼文每 6 小時、限動每 30 分鐘；手動同步 API 共用）
+	api.MediaSync = &posts.MediaSyncer{Svc: api.Posts, IG: mediaLister, Creds: api.Accounts.Credentials,
+		OnAPIError: api.Accounts.NoteAPIError, Insights: api.Posts.Insights}
+	go api.MediaSync.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
 
 	// 總覽：系統狀態（每分鐘檢查、轉紅／恢復推 system.alert）與每日摘要（到時間產生前一天的摘要、推 digest.ready）。

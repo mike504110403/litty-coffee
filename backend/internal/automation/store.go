@@ -56,13 +56,20 @@ type Settings struct {
 	DigestTime string `json:"digestTime"`
 	// DistillWeekly＝每週一 09:00（店家時區）自動蒸餾近 7 天對話成建議（只產建議，不會自動生效）
 	DistillWeekly bool `json:"distillWeekly"`
+	// PostsKBEnabled＝AI（自動回覆、建議回覆、寫文案、蒸餾）參考這個帳號近期的 IG 貼文文案（預設開）
+	PostsKBEnabled bool `json:"postsKbEnabled"`
+	// RecentPosts 不存 DB：呼叫 AI 前由 Store.LoadRecentPosts 依 PostsKBEnabled 填入（見 postsref.go）
+	RecentPosts []PostRef `json:"-"`
 	// Throttled 不存 DB：引擎在顧客降頻中時設成 true，請 AI 回得簡短、委婉
 	Throttled bool `json:"-"`
 }
 
 // Store 的資料都依 IG 帳號（ig_accounts.id）區分；ig_account_id IS NULL 的是「範本」，
 // 帳號第一次用到時（EnsureAccount）從範本複製一份設定、知識庫、規則。
-type Store struct{ DB *pgxpool.Pool }
+type Store struct {
+	DB  *pgxpool.Pool
+	Loc *time.Location // 店家時區（AI 參考貼文的日期用）；nil＝time.Local
+}
 
 // EnsureAccount 確保帳號有自己的設定／知識庫／規則；沒有就從範本複製（並行安全：以設定列的 UNIQUE 判定誰複製）。
 func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
@@ -91,9 +98,9 @@ func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
 	}
 	tag, err := tx.Exec(ctx, `
 INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly, ig_account_id)
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, ig_account_id)
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly, $1
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, $1
 FROM automation_settings WHERE ig_account_id IS NULL
 ON CONFLICT (ig_account_id) DO NOTHING`, accountID)
 	if err != nil {
@@ -291,10 +298,10 @@ func (s *Store) GetSettings(ctx context.Context, accountID int64) (Settings, err
 	}
 	err := s.DB.QueryRow(ctx, `
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled
 FROM automation_settings WHERE ig_account_id=$1`,
 		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration,
-		&st.AutoReplyEnabled, &st.DigestTime, &st.DistillWeekly)
+		&st.AutoReplyEnabled, &st.DigestTime, &st.DistillWeekly, &st.PostsKBEnabled)
 	return st, err
 }
 
@@ -321,8 +328,9 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	st.Persona, st.HandoffMessage = strings.TrimSpace(st.Persona), strings.TrimSpace(st.HandoffMessage)
 	_, err := s.DB.Exec(ctx, `
 UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4,
-  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, distill_weekly=$11, updated_at=now() WHERE ig_account_id=$5`,
+  spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, distill_weekly=$11,
+  posts_kb_enabled=$12, updated_at=now() WHERE ig_account_id=$5`,
 		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration,
-		st.AutoReplyEnabled, st.DigestTime, st.DistillWeekly)
+		st.AutoReplyEnabled, st.DigestTime, st.DistillWeekly, st.PostsKBEnabled)
 	return st, err
 }

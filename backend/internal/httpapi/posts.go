@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
 	"github.com/mike504110403/litty-coffee/backend/internal/posts"
@@ -29,6 +30,9 @@ func (s *Server) postRoutes(r chi.Router) {
 	r.Delete("/posts/{id}", s.deletePost)
 	r.Post("/posts/caption", s.suggestCaption)
 	r.Post("/posts/{id}/insights/refresh", s.refreshInsights)
+	r.Patch("/posts/{id}/ai-exclude", s.setPostAIExclude)
+	// IG 貼文同步（帳號層級，須在可見範圍內；排程權限即可，不限超管）
+	r.Post("/ig/accounts/{id}/sync-media", s.syncAccountMedia)
 }
 
 // uploadMedia：表單欄位 account＝這個檔案要給哪個 IG 帳號用（必填、須在可見範圍內）。
@@ -69,8 +73,13 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	source := q.Get("source")
+	if source != "" && source != posts.SourceApp && source != posts.SourceIG {
+		writeErr(w, http.StatusBadRequest, "source 必須是 app 或 ig")
+		return
+	}
 	list, err := s.Posts.List(r.Context(), posts.ListFilter{From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
-		Status: q.Get("status"), Accounts: accounts})
+		Status: q.Get("status"), Source: source, Accounts: accounts})
 	if err != nil {
 		log.Printf("posts: %v", err)
 		writeErr(w, http.StatusInternalServerError, "讀取失敗")
@@ -119,7 +128,7 @@ func (s *Server) postErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, posts.ErrNotFound):
 		writeErr(w, http.StatusNotFound, posts.ErrNotFound.Error())
-	case errors.Is(err, posts.ErrImmutable):
+	case errors.Is(err, posts.ErrImmutable), errors.Is(err, posts.ErrSynced):
 		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		log.Printf("posts: %v", err)
@@ -148,6 +157,10 @@ func (s *Server) savePost(w http.ResponseWriter, r *http.Request) {
 			s.postErr(w, err)
 			return
 		}
+		if old.Source == posts.SourceIG {
+			writeErr(w, http.StatusConflict, posts.ErrSynced.Error())
+			return
+		}
 		in.Post.ID = id
 		if in.Post.IGAccountID == 0 {
 			in.Post.IGAccountID = old.IGAccountID
@@ -160,7 +173,7 @@ func (s *Server) savePost(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, posts.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, posts.ErrImmutable):
+	case errors.Is(err, posts.ErrImmutable), errors.Is(err, posts.ErrSynced):
 		writeErr(w, http.StatusConflict, err.Error())
 	case err != nil:
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -183,7 +196,7 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, posts.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, posts.ErrImmutable):
+	case errors.Is(err, posts.ErrImmutable), errors.Is(err, posts.ErrSynced):
 		writeErr(w, http.StatusConflict, err.Error())
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, "刪除失敗")
@@ -223,6 +236,10 @@ func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
 	kb, err := s.Auto.Store.ListKnowledge(r.Context(), in.Account)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "讀取知識庫失敗")
+		return
+	}
+	if err := s.Auto.Store.LoadRecentPosts(r.Context(), in.Account, &st); err != nil { // 近期 IG 貼文（設定關閉時不帶）
+		writeErr(w, http.StatusInternalServerError, "讀取近期貼文失敗")
 		return
 	}
 	images, err := s.captionImages(r.Context(), in.Account, in.MediaIDs)
@@ -305,5 +322,72 @@ func (s *Server) refreshInsights(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "向 IG 取得數據失敗："+err.Error())
 	default:
 		writeJSON(w, http.StatusOK, p)
+	}
+}
+
+// setPostAIExclude 切換單篇貼文「不給 AI 參考」；兩種來源（後台發的、IG 同步的）都可以。body {"aiExclude": bool}。
+func (s *Server) setPostAIExclude(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var in struct {
+		AIExclude *bool `json:"aiExclude"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.AIExclude == nil {
+		writeErr(w, http.StatusBadRequest, "請帶 aiExclude（true／false）")
+		return
+	}
+	if _, err := s.scopedPost(r, id); err != nil {
+		s.postErr(w, err)
+		return
+	}
+	p, err := s.Posts.SetAIExclude(r.Context(), id, *in.AIExclude)
+	if err != nil {
+		s.postErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// syncAccountMedia 手動同步一個帳號的 IG 貼文與限動：帳號須在可見範圍內（範圍外、不存在一律 404）；
+// 每帳號 1 分鐘冷卻（429＋Retry-After）。回 {"posts":n,"stories":n}（本次處理的篇數，含新建與更新）。
+func (s *Server) syncAccountMedia(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if !canSee(r, id) {
+		writeErr(w, http.StatusNotFound, "找不到這個 IG 帳號")
+		return
+	}
+	if _, err := s.Accounts.Get(r.Context(), id); err != nil {
+		if errors.Is(err, account.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "找不到這個 IG 帳號")
+			return
+		}
+		log.Printf("sync media %d: %v", id, err)
+		writeErr(w, http.StatusInternalServerError, "伺服器錯誤")
+		return
+	}
+	if s.MediaSync == nil {
+		writeErr(w, http.StatusServiceUnavailable, "IG 貼文同步未啟用")
+		return
+	}
+	res, err := s.MediaSync.SyncNow(r.Context(), id)
+	var cool *posts.CooldownError
+	switch {
+	case errors.As(err, &cool):
+		w.Header().Set("Retry-After", strconv.Itoa(int((cool.RetryAfter+time.Second-1)/time.Second)))
+		writeErr(w, http.StatusTooManyRequests, cool.Error())
+	case errors.Is(err, posts.ErrNoToken):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		log.Printf("sync media %d: %v", id, err)
+		writeErr(w, http.StatusBadGateway, "向 IG 同步貼文失敗："+err.Error())
+	default:
+		writeJSON(w, http.StatusOK, res)
 	}
 }

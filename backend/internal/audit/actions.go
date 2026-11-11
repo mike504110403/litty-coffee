@@ -62,6 +62,8 @@ var Routes = []Route{
 	{"DELETE", "/posts/{id}", "post.delete", "刪除貼文", "post", false},
 	{"POST", "/posts/caption", "post.caption", "AI 產生貼文文案", "", false},
 	{"POST", "/posts/{id}/insights/refresh", "post.refresh_insights", "更新貼文成效", "post", false},
+	{"PATCH", "/posts/{id}/ai-exclude", "post.ai_exclude", "設定貼文是否給 AI 參考", "post", false},
+	{"POST", "/ig/accounts/{id}/sync-media", "ig.sync_media", "同步 IG 貼文", "ig_account", false},
 
 	{"POST", "/ig/connections/{id}/refresh", "ig.sync_connection", "同步 IG 帳號", "connection", false},
 	{"POST", "/ig/connections/{id}/accounts", "ig.add_account", "手動加入 IG 帳號", "connection", false},

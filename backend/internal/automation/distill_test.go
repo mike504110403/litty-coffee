@@ -127,7 +127,7 @@ func TestDistillPromptWrapsDataAndAccountOnly(t *testing.T) {
 	rules := []Rule{{ID: 7, Name: "菜單", MatchType: "contains", Keywords: []string{"菜單", "menu"}, Reply: "菜單在精選動態", Enabled: true}}
 	kb := []Knowledge{{ID: 3, Title: "營業時間", Content: "週二至週日 9:00-18:00", Enabled: true},
 		{ID: 4, Title: "很長", Content: strings.Repeat("字", distillKBRunes+10), Enabled: true}}
-	sys := WithGuard(DistillSystemPrompt(rules, kb))
+	sys := WithGuard(DistillSystemPrompt(rules, kb, nil))
 	if !strings.HasPrefix(sys, "## 安全規則") {
 		t.Fatal("system prompt must start with guard")
 	}

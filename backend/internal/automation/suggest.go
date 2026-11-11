@@ -148,6 +148,7 @@ func SuggestSystemPrompt(st Settings, kb []Knowledge) string {
 	if len(items) == 0 {
 		b.WriteString("\n（店家尚未填寫任何資料：除了打招呼之外，每個問題都寫「" + SuggestFallbackPhrase + "」，basis 給空陣列，warning 註明知識庫是空的。）\n")
 	}
+	b.WriteString(postsRefSection(st.RecentPosts, postsRulesSuggest))
 	return b.String()
 }
 

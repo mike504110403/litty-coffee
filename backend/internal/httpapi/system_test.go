@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ VALUES ($1, 'scheduled', now() - interval '1 hour', now() - interval '1 hour')`,
 	owner.json("PUT", fmt.Sprintf("/api/automation/settings?account=%d", A), `{"autoReplyEnabled":false}`, 200)
 	after := decode[automation.Settings](t, owner.json("GET", fmt.Sprintf("/api/automation/settings?account=%d", A), "", 200))
 	before.AutoReplyEnabled = false
-	if after != before {
+	if !reflect.DeepEqual(after, before) { // Settings 含 RecentPosts（不存 DB 的 slice），不能用 ==
 		t.Fatalf("partial update changed other fields:\n%+v\n%+v", before, after)
 	}
 	if v := decode[statusView](t, owner.json("GET", "/api/system/status", "", 200)); v.Accounts[0].AutoReplyEnabled {

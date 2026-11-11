@@ -96,7 +96,7 @@ func TestFinishSuggestionKeepsOnlyRealKnowledgeTitles(t *testing.T) {
 	kb := []Knowledge{{Title: "營業時間", Content: "9-18", Enabled: true}, {Title: "停用", Content: "x", Enabled: false}}
 	s := finishSuggestion(suggestOut{Warning: " 缺價格 ", Options: []suggestOptionOut{
 		{Label: " 直接回答 ", Draft: "  你好  ", Basis: []string{"營業時間", "營業時間", "模型編的", "停用"}},
-		{Label: "", Draft: "你好"}, // 與第一個重複 → 丟掉
+		{Label: "", Draft: "你好"},   // 與第一個重複 → 丟掉
 		{Label: "x", Draft: "   "}, // 空 → 丟掉
 		{Label: "這是一個非常非常非常長的標籤文字", Draft: "第二版"},
 	}}, kb)

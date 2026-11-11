@@ -503,3 +503,47 @@ func TestMigration17DistillPreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 00018：IG 貼文同步欄位。既有貼文保留、一律 source='app'、ai_exclude=false；設定 posts_kb_enabled 預設開；
+// 同帳號同 media id 只能一筆（空字串不限）；Down 後資料（含同步進來的）保留，再 Up 也能跑。
+func TestMigration18IGMediaSyncPreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 17); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acc-a'), ('acc-b')`)
+	mustExec(t, d, `DELETE FROM automation_settings`)
+	mustExec(t, d, `INSERT INTO automation_settings (ig_account_id, persona, distill_weekly) VALUES (NULL, '範本', false), (1, 'A 店', true)`)
+	mustExec(t, d, `INSERT INTO scheduled_posts (ig_account_id, kind, caption, status, ig_media_id, published_at) VALUES
+  (1, 'image', '已發佈', 'published', 'm1', now()), (1, 'reel', '草稿', 'draft', '', NULL), (1, 'image', '草稿2', 'draft', '', NULL),
+  (2, 'image', 'B 已發佈', 'published', 'm1', now())`)
+	if err := goose.UpToContext(ctx, d, "migrations", 18); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM scheduled_posts WHERE source = 'app' AND NOT ai_exclude AND ig_thumb = '' AND ig_synced_at IS NULL`) != 4 ||
+		strOf(t, d, `SELECT caption || status || ig_media_id FROM scheduled_posts WHERE id = 1`) != "已發佈publishedm1" {
+		t.Fatal("既有貼文應保留且為後台來源")
+	}
+	if intOf(t, d, `SELECT count(*) FROM automation_settings WHERE posts_kb_enabled`) != 2 ||
+		strOf(t, d, `SELECT persona || distill_weekly::text FROM automation_settings WHERE ig_account_id = 1`) != "A 店true" {
+		t.Fatal("既有設定應保留、貼文參考預設開")
+	}
+	if _, err := d.Exec(`INSERT INTO scheduled_posts (ig_account_id, ig_media_id, source) VALUES (1, 'm1', 'ig')`); err == nil {
+		t.Fatal("同帳號同 media id 只能一筆")
+	}
+	if _, err := d.Exec(`INSERT INTO scheduled_posts (ig_account_id, source) VALUES (1, 'other')`); err == nil {
+		t.Fatal("source 只收 app／ig")
+	}
+	mustExec(t, d, `INSERT INTO scheduled_posts (ig_account_id, kind, caption, status, ig_media_id, source, ig_thumb, published_at)
+VALUES (1, 'story', '同步的限動', 'published', 'm2', 'ig', 'ig-x.jpg', now())`)
+	if err := goose.DownToContext(ctx, d, "migrations", 17); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM scheduled_posts`) != 5 || intOf(t, d, `SELECT count(*) FROM automation_settings`) != 2 {
+		t.Fatal("down: 資料應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -137,6 +137,8 @@ type FakePublisher struct {
 
 	Calls        []PublishCall     // 每次 Publish 用的帳號與 token（測試驗證用對帳號）
 	InsightToken map[string]string // mediaID → 最後一次查成效用的 token
+
+	mediaState fakeMediaState // 假貼文／限動（同步用，見 media.go）
 }
 
 // PublishCall 是 FakePublisher 收到的一次發佈。

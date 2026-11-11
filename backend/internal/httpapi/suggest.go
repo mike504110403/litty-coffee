@@ -129,6 +129,10 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 		s.autoErr(w, err)
 		return
 	}
+	if err := s.Auto.Store.LoadRecentPosts(r.Context(), c.IGAccountID, &st); err != nil { // 近期 IG 貼文（設定關閉時不帶）
+		s.autoErr(w, err)
+		return
+	}
 	msgs, err := s.Inbox.ListMessages(r.Context(), c.ID, 0, automation.SuggestMaxTurns)
 	if err != nil {
 		s.inboxErr(w, err)
