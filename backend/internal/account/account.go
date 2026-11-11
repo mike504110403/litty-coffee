@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,7 +26,8 @@ var (
 	ErrNotConnected  = errors.New("這個 IG 帳號尚未連結（到「設定」連結）")
 	ErrInactive      = errors.New("這個 IG 帳號已停用（到「設定」啟用）")
 	ErrExpired       = errors.New("IG 授權已過期，請到「設定」重新連結")
-	ErrNoAccounts    = errors.New("這個授權還沒有指派任何 IG 專業帳號：到 Meta 商家設定 →「系統工作人員」把 IG 帳號指派給它（完整控制），再回設定頁按「同步帳號」")
+	ErrNoAccounts    = errors.New("Meta 沒有列出這個授權的 IG 帳號：請按「手動加入帳號」，輸入 IG 帳號編號（Meta 商家設定 →「Instagram 帳號」可以看到）")
+	ErrBadIGID       = errors.New("IG 帳號編號應為一串數字")
 	ErrNotConfigured = errors.New("尚未設定 Meta App ID／App Secret／配置 ID（到「設定 → 憑證」填寫，或設 IG_APP_ID／IG_APP_SECRET／IG_CONFIG_ID）")
 )
 
@@ -291,7 +293,7 @@ RETURNING `+accountCols, info.UserID, info.Username, info.Name, info.ProfilePic,
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE ig_accounts SET connection_id = NULL, webhook_subscribed = false, last_error = '這次授權沒有包含此帳號，請重新連結'
-WHERE connection_id = $1 AND NOT (ig_user_id = ANY($2))`, connID, ids); err != nil {
+WHERE connection_id = $1 AND NOT added_manually AND NOT (ig_user_id = ANY($2))`, connID, ids); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -333,6 +335,41 @@ func (s *Service) connToken(ctx context.Context, connID int64) (string, error) {
 	return s.decrypt(enc)
 }
 
+// AddAccount 手動把 IG 帳號加入連線：先用連線的 token 讀這個帳號（讀得到＝有權操作），再掛上連線並訂閱 webhook。
+func (s *Service) AddAccount(ctx context.Context, connID int64, igUserID string) (Account, error) {
+	igUserID = strings.TrimSpace(igUserID)
+	if igUserID == "" || strings.Trim(igUserID, "0123456789") != "" {
+		return Account{}, ErrBadIGID
+	}
+	if !s.OAuthReady() {
+		return Account{}, ErrNotConfigured
+	}
+	tok, err := s.connToken(ctx, connID)
+	if err != nil {
+		return Account{}, err
+	}
+	info, err := s.OAuth.Account(ctx, tok, igUserID)
+	if err != nil {
+		return Account{}, fmt.Errorf("這個授權讀不到帳號 %s（確認授權時有分享它、編號沒打錯）：%w", igUserID, err)
+	}
+	a, err := scanAccount(s.DB.QueryRow(ctx, `
+INSERT INTO ig_accounts (ig_user_id, username, name, profile_pic, connection_id, connected_at, added_manually)
+VALUES ($1, $2, $3, $4, $5, $6, true)
+ON CONFLICT (ig_user_id) DO UPDATE SET
+  username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE ig_accounts.username END,
+  name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE ig_accounts.name END,
+  profile_pic = CASE WHEN EXCLUDED.profile_pic <> '' THEN EXCLUDED.profile_pic ELSE ig_accounts.profile_pic END,
+  connection_id = EXCLUDED.connection_id, connected_at = EXCLUDED.connected_at, added_manually = true, last_error = ''
+RETURNING `+accountCols, info.UserID, info.Username, info.Name, info.ProfilePic, connID, s.now()))
+	if err != nil {
+		return Account{}, err
+	}
+	if _, err := s.DB.Exec(ctx, `UPDATE ig_connections SET last_error = '' WHERE id = $1`, connID); err != nil {
+		return Account{}, err
+	}
+	return s.subscribe(ctx, a, tok)
+}
+
 // RefreshConnection 用已存的 token 重新同步帳號清單（店家在 Meta 後台加減指派的帳號）並重查到期日。
 // 失敗寫在連線的 last_error。
 func (s *Service) RefreshConnection(ctx context.Context, connID int64) (Connection, error) {
@@ -356,7 +393,13 @@ func (s *Service) RefreshConnection(ctx context.Context, connID int64) (Connecti
 		return fail(err)
 	}
 	if len(list) == 0 {
-		return fail(ErrNoAccounts)
+		var manual int
+		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM ig_accounts WHERE connection_id = $1 AND added_manually`, connID).Scan(&manual); err != nil {
+			return Connection{}, err
+		}
+		if manual == 0 {
+			return fail(ErrNoAccounts)
+		}
 	}
 	if ex, ok := s.OAuth.(interface {
 		TokenExpiry(context.Context, string) (*time.Time, error)

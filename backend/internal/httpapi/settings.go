@@ -33,6 +33,7 @@ func (s *Server) settingsRoutes(r chi.Router) {
 	r.Get("/ig/oauth/start", s.igOAuthStart)
 	r.Get("/ig/oauth/callback", s.igOAuthCallback)
 	r.Post("/ig/connections/{id}/refresh", s.igConnRefresh)
+	r.Post("/ig/connections/{id}/accounts", s.igConnAddAccount)
 	r.Delete("/ig/connections/{id}", s.igConnDisconnect)
 	// 帳號層級（須在可見範圍內）
 	r.Post("/ig/accounts/{id}/active", s.igAccountActive)
@@ -186,6 +187,35 @@ func (s *Server) igConnRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// igConnAddAccount：Meta 沒列出帳號時，店長手動輸入 IG 帳號編號加入連線。
+func (s *Server) igConnAddAccount(w http.ResponseWriter, r *http.Request) {
+	if !requireAllAccounts(w, r) {
+		return
+	}
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var in struct {
+		IGUserID string `json:"igUserId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	a, err := s.Accounts.AddAccount(r.Context(), id, in.IGUserID)
+	switch {
+	case errors.Is(err, account.ErrBadIGID):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		s.accountErr(w, err)
+	default:
+		log.Printf("ig account added manually: @%s (%s) via connection %d", a.Username, a.IGUserID, id)
+		writeJSON(w, http.StatusOK, a)
+	}
 }
 
 func (s *Server) igConnDisconnect(w http.ResponseWriter, r *http.Request) {

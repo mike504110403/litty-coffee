@@ -259,7 +259,7 @@ func TestConnectErrorsAndPartialSubscribe(t *testing.T) {
 		t.Fatalf("no accounts: %v", err)
 	}
 	// 沒指派帳號：保留連線並記錯誤，之後在 Meta 補指派、按「同步帳號」即可
-	if count(t, s.DB, `SELECT count(*) FROM ig_connections WHERE last_error LIKE '%系統工作人員%'`) != 1 {
+	if count(t, s.DB, `SELECT count(*) FROM ig_connections WHERE last_error LIKE '%手動加入帳號%'`) != 1 {
 		t.Fatal("沒帳號時應保留連線並記錯誤")
 	}
 	if count(t, s.DB, `SELECT count(*) FROM ig_accounts`) != 0 {
@@ -391,5 +391,38 @@ func TestDisableDisconnectAndFallback(t *testing.T) {
 	}
 	if _, _, err := s.Credentials(ctx, 9999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown: %v", err)
+	}
+}
+
+// 重現實測：Unified Login 的指派清單是空的，但 token 讀得到帳號 → 手動加入，同步帳號時不會被拿掉。
+func TestAddAccountManuallyWhenListEmpty(t *testing.T) {
+	f := ig.NewFakeOAuth("http://x/cb")
+	f.List = nil
+	f.Extra = []ig.AccountInfo{{UserID: "17841467271924092", Username: "mikedev666"}}
+	s, _ := setup(t, f)
+	ctx := context.Background()
+	conn, _, err := s.Connect(ctx, "dev-code")
+	if !errors.Is(err, ErrNoAccounts) || conn.ID == 0 {
+		t.Fatalf("connect: %+v %v", conn, err)
+	}
+	if _, err := s.AddAccount(ctx, conn.ID, "abc"); !errors.Is(err, ErrBadIGID) {
+		t.Fatalf("bad id: %v", err)
+	}
+	if _, err := s.AddAccount(ctx, conn.ID, "999"); err == nil || !strings.Contains(err.Error(), "讀不到") {
+		t.Fatalf("unreadable: %v", err)
+	}
+	a, err := s.AddAccount(ctx, conn.ID, " 17841467271924092 ")
+	if err != nil || a.Username != "mikedev666" || !a.WebhookSubscribed || a.ConnectionID == nil || *a.ConnectionID != conn.ID {
+		t.Fatalf("add: %+v %v", a, err)
+	}
+	if c, _ := s.Connection(ctx, conn.ID); c.LastError != "" {
+		t.Fatalf("connection error not cleared: %q", c.LastError)
+	}
+	// 同步帳號：清單仍空，手動加入的帳號要保留、不報錯
+	if _, err := s.RefreshConnection(ctx, conn.ID); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, tok, err := s.Credentials(ctx, a.ID); err != nil || tok == "" {
+		t.Fatalf("credentials after refresh: %v", err)
 	}
 }

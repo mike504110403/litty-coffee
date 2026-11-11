@@ -57,7 +57,8 @@ type OAuth interface {
 	Exchange(ctx context.Context, code string) (Token, error)
 	Business(ctx context.Context, token string) (Business, error)
 	Accounts(ctx context.Context, token string) ([]AccountInfo, error)
-	Subscribe(ctx context.Context, token, igUserID string) error // 讓本 app 收到該帳號的私訊、已讀、表情 webhook
+	Account(ctx context.Context, token, igUserID string) (AccountInfo, error) // 用 token 直接讀單一帳號（手動加入時驗證）
+	Subscribe(ctx context.Context, token, igUserID string) error              // 讓本 app 收到該帳號的私訊、已讀、表情 webhook
 	ConfigID() string
 }
 
@@ -199,6 +200,16 @@ func (c *OAuthClient) Accounts(ctx context.Context, token string) ([]AccountInfo
 	return out, nil
 }
 
+// Account 用 token 直接讀某個 IG 帳號；讀得到＝這個 token 有權操作它。
+func (c *OAuthClient) Account(ctx context.Context, token, igUserID string) (AccountInfo, error) {
+	var a AccountInfo
+	err := c.get(ctx, c.APIBase+"/"+url.PathEscape(igUserID)+"?fields=id,username,name,profile_picture_url", token, &a)
+	if err == nil && a.UserID == "" {
+		err = errors.New("meta 沒有回傳帳號 id")
+	}
+	return a, err
+}
+
 func (c *OAuthClient) Subscribe(ctx context.Context, token, igUserID string) error {
 	u := fmt.Sprintf("%s/%s/subscribed_apps?subscribed_fields=messages,messaging_seen,message_reactions",
 		c.APIBase, url.PathEscape(igUserID))
@@ -269,6 +280,7 @@ type FakeOAuth struct {
 	RedirectURI  string
 	Biz          Business
 	List         []AccountInfo
+	Extra        []AccountInfo // 測試用：token 讀得到、但不在指派清單上的帳號（重現 Unified Login 實測行為）
 	Token        Token
 	SubscribeErr map[string]error // 測試用：這些帳號訂閱失敗
 	Subscribed   []string
@@ -309,6 +321,15 @@ func (f *FakeOAuth) Business(context.Context, string) (Business, error) { return
 
 func (f *FakeOAuth) Accounts(context.Context, string) ([]AccountInfo, error) {
 	return append([]AccountInfo(nil), f.List...), nil
+}
+
+func (f *FakeOAuth) Account(_ context.Context, _, igUserID string) (AccountInfo, error) {
+	for _, a := range append(append([]AccountInfo(nil), f.List...), f.Extra...) {
+		if a.UserID == igUserID {
+			return a, nil
+		}
+	}
+	return AccountInfo{}, &APIError{Status: 400, Code: 100, Message: "Unsupported get request"}
 }
 
 func (f *FakeOAuth) Subscribe(_ context.Context, _, igUserID string) error {

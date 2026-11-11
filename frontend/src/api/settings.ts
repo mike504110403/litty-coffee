@@ -36,6 +36,9 @@ export const settingsApi = {
   get: () => http.get<SettingsInfo>('/settings').then((r) => r.data),
   // OAuth 要整頁導向（Facebook 授權頁不能在 XHR 裡開）
   connectUrl: '/api/ig/oauth/start',
+  // Meta 沒列出帳號時，手動輸入 IG 帳號編號加入連線
+  addAccount: (connId: number, igUserId: string) =>
+    http.post<IgAccount>(`/ig/connections/${connId}/accounts`, { igUserId }).then((r) => r.data),
   refreshConnection: (id: number) =>
     http.post<IgConnection>(`/ig/connections/${id}/refresh`, null, { timeout: 60000 }).then((r) => r.data),
   disconnect: (id: number) => http.delete(`/ig/connections/${id}`),

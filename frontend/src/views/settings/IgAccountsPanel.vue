@@ -54,6 +54,28 @@ function connect() {
 const sync = (c: IgConnection) =>
   after(() => settingsApi.refreshConnection(c.id), `sync${c.id}`, '已同步帳號清單')
 
+// Unified Login 的指派清單可能是空的（實測如此），讓店長輸入 IG 帳號編號手動加入
+async function addManually(c: IgConnection) {
+  let id: string
+  try {
+    const r = await ElMessageBox.prompt(
+      '到 Meta 商家設定 →「帳號」→「Instagram 帳號」，點帳號後會看到一串數字的「編號」。後台會先確認這個授權讀得到它才加入。',
+      '手動加入 IG 帳號',
+      {
+        confirmButtonText: '加入',
+        cancelButtonText: '取消',
+        inputPlaceholder: '例如 17841467271924092',
+        inputPattern: /^\s*\d+\s*$/,
+        inputErrorMessage: 'IG 帳號編號是一串數字',
+      },
+    )
+    id = r.value.trim()
+  } catch {
+    return
+  }
+  await after(() => settingsApi.addAccount(c.id, id), `add${c.id}`, '已加入帳號')
+}
+
 async function disconnect(c: IgConnection, accounts: IgAccount[]) {
   try {
     await ElMessageBox.confirm(
@@ -136,6 +158,7 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
         </div>
         <div class="actions">
           <el-button size="small" :loading="busy === `sync${g.conn.id}`" @click="sync(g.conn)">同步帳號</el-button>
+          <el-button size="small" :loading="busy === `add${g.conn.id}`" @click="addManually(g.conn)">手動加入帳號</el-button>
           <el-button size="small" @click="connect">重新連結</el-button>
           <el-button
             size="small"

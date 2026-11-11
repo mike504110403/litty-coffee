@@ -96,6 +96,14 @@ func (l *LiveOAuth) Accounts(ctx context.Context, token string) ([]ig.AccountInf
 	return c.Accounts(ctx, token)
 }
 
+func (l *LiveOAuth) Account(ctx context.Context, token, igUserID string) (ig.AccountInfo, error) {
+	c := l.client()
+	if c == nil {
+		return ig.AccountInfo{}, ErrNotConfigured
+	}
+	return c.Account(ctx, token, igUserID)
+}
+
 func (l *LiveOAuth) Subscribe(ctx context.Context, token, igUserID string) error {
 	c := l.client()
 	if c == nil {
