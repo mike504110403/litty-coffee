@@ -46,8 +46,11 @@ export const useInboxStore = defineStore('inbox', () => {
 
   function appendMessage(m: Message) {
     const list = messages.value[m.conversationId]
-    if (!list || list.some((x) => x.id === m.id)) return
-    list.push(m)
+    if (!list) return
+    // 同一筆再次推送（例：echo 先到、後台送出後認領成自己的）→ 就地取代，送出者名字才會更新
+    const i = list.findIndex((x) => x.id === m.id)
+    if (i >= 0) list[i] = m
+    else list.push(m)
   }
 
   function replaceMessage(m: Message) {

@@ -144,6 +144,36 @@ RETURNING id`, r.contactID).Scan(&r.convID); err != nil {
 	}
 
 	r.msg = Message{ConversationID: r.convID, IGAccountID: accountID, Direction: direction, SenderType: sender, Kind: kind, Text: text, MediaURL: media, CreatedAt: ts}
+	// 我方從後台送出的訊息，echo 回來時的 mid 跟送出 API 回傳的格式不同（實測 graph.facebook.com：
+	// 送出回 new_ig_dm_item…、echo 是 ig_message_item…），比對不到 ig_mid。改用「同對話、同內容、前後 2 分鐘、
+	// 還沒配對過 echo 的我方訊息」配對：配到就記下 echo mid，不再新增一筆。
+	if !inbound && text != "" {
+		var matched int64
+		err := tx.QueryRow(ctx, `
+UPDATE messages SET meta = meta || jsonb_build_object('echoMid', $4::text)
+WHERE id = (
+  SELECT id FROM messages
+  WHERE conversation_id = $1 AND direction = 'out' AND text = $2 AND NOT (meta ? 'echoMid')
+    AND ig_mid IS DISTINCT FROM $4 AND created_at BETWEEN $3::timestamptz - interval '2 minutes' AND $3::timestamptz + interval '2 minutes'
+  ORDER BY abs(extract(epoch FROM created_at - $3::timestamptz)) LIMIT 1
+)
+RETURNING id`, r.convID, text, ts, m.Message.MID).Scan(&matched)
+		if err == nil {
+			return r, false, nil
+		}
+		if err != pgx.ErrNoRows {
+			return r, false, err
+		}
+		// 同一個 echo 重送：前面已配對過
+		var dup bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1 AND meta->>'echoMid' = $2)`,
+			r.convID, m.Message.MID).Scan(&dup); err != nil {
+			return r, false, err
+		}
+		if dup {
+			return r, false, nil
+		}
+	}
 	err := tx.QueryRow(ctx, `
 INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, kind, text, media_url, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

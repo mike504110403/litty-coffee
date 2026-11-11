@@ -63,15 +63,31 @@ WHERE c.id = $1`, convID).Scan(&accountID, &igsid, &lastInbound)
 		sentBy = &adminID
 	}
 	var sentByName *string
-	// echo 可能比這裡先到並以 human 落庫；以我方的 sender_type／送出者為準覆寫
-	if err := s.DB.QueryRow(ctx, `
+	// echo 可能比這裡先到、以 human 落庫，而且 mid 格式跟送出回傳的不同（見 ingest.go）：
+	// 先認領「同對話、同內容、前後 2 分鐘、沒有送出者、還沒被認領」的 echo 那筆，改成我方的 sender_type／送出者
+	err = s.DB.QueryRow(ctx, `
+UPDATE messages SET sender_type = $3, sent_by_admin_id = $5, meta = meta || jsonb_build_object('echoMid', ig_mid), ig_mid = $6
+WHERE id = (
+  SELECT id FROM messages
+  WHERE conversation_id = $1 AND direction = 'out' AND text = $2 AND sent_by_admin_id IS NULL AND sender_type = 'human'
+    AND NOT (meta ? 'echoMid') AND created_at BETWEEN $4::timestamptz - interval '2 minutes' AND $4::timestamptz + interval '2 minutes'
+  ORDER BY abs(extract(epoch FROM created_at - $4::timestamptz)) LIMIT 1
+)
+RETURNING id, created_at, (SELECT COALESCE(NULLIF(display_name, ''), username) FROM admin_users WHERE id = $5)`,
+		convID, text, senderType, now, sentBy, mid).Scan(&m.ID, &m.CreatedAt, &sentByName)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Message{}, err
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := s.DB.QueryRow(ctx, `
 INSERT INTO messages (conversation_id, ig_mid, direction, sender_type, kind, text, created_at, sent_by_admin_id)
 VALUES ($1, $2, 'out', $3, 'text', $4, $5, $6)
 ON CONFLICT (ig_mid) DO UPDATE SET sender_type = EXCLUDED.sender_type, sent_by_admin_id = EXCLUDED.sent_by_admin_id
 RETURNING id, created_at,
   (SELECT COALESCE(NULLIF(display_name, ''), username) FROM admin_users WHERE id = $6)`,
-		convID, mid, senderType, text, now, sentBy).Scan(&m.ID, &m.CreatedAt, &sentByName); err != nil {
-		return Message{}, err
+			convID, mid, senderType, text, now, sentBy).Scan(&m.ID, &m.CreatedAt, &sentByName); err != nil {
+			return Message{}, err
+		}
 	}
 	if sentBy != nil && sentByName != nil {
 		m.SentBy = &Sender{ID: adminID, DisplayName: *sentByName}
