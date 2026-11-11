@@ -109,8 +109,8 @@ async function remove(k: Knowledge) {
   font-size: 14px;
   line-height: 1.6;
   color: var(--lc-roast);
-  background: #fbf3e9;
-  border-color: #f0dfca;
+  background: var(--lc-warn-bg-2);
+  border-color: var(--lc-warn-line);
   margin-bottom: 14px;
 }
 .list {
@@ -145,7 +145,7 @@ async function remove(k: Knowledge) {
   align-items: center;
   font-size: 12px;
   .warn {
-    color: #b7791f;
+    color: var(--lc-tone-amber-fg);
   }
   .ok {
     color: var(--lc-muted);

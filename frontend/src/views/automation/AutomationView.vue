@@ -70,8 +70,8 @@ onMounted(async () => {
   padding: 6px 12px;
   border-radius: 999px;
   font-size: 13px;
-  background: #f6e3e1;
-  color: #a2504a;
+  background: var(--lc-tone-rose-bg);
+  color: var(--lc-tone-rose-fg);
   .dot {
     width: 8px;
     height: 8px;
@@ -79,8 +79,8 @@ onMounted(async () => {
     background: currentColor;
   }
   &.on {
-    background: #e4ede2;
-    color: #4f7a4a;
+    background: var(--lc-tone-sage-bg);
+    color: var(--lc-tone-sage-fg);
   }
 }
 .tabs {
@@ -89,7 +89,7 @@ onMounted(async () => {
   padding: 4px;
   margin-bottom: 18px;
   border-radius: 14px;
-  background: #efe6db;
+  background: var(--lc-bg-track);
   width: fit-content;
   max-width: 100%;
   overflow-x: auto;
@@ -106,10 +106,10 @@ onMounted(async () => {
   color: var(--lc-muted);
   cursor: pointer;
   &.on {
-    background: #fff;
+    background: var(--lc-bg-tab-on);
     color: var(--lc-text);
     font-weight: 500;
-    box-shadow: 0 1px 3px rgba(59, 42, 32, 0.1);
+    box-shadow: var(--lc-tab-shadow);
   }
 }
 @media (max-width: 768px) {

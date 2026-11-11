@@ -77,9 +77,9 @@ async function submit() {
   padding: 40px;
   color: var(--lc-latte);
   background:
-    radial-gradient(circle at 20% 20%, rgba(200, 145, 90, 0.35), transparent 50%),
-    radial-gradient(circle at 80% 90%, rgba(107, 74, 53, 0.6), transparent 55%),
-    var(--lc-espresso);
+    radial-gradient(circle at 20% 20%, var(--lc-hero-glow-1), transparent 50%),
+    radial-gradient(circle at 80% 90%, var(--lc-hero-glow-2), transparent 55%),
+    var(--lc-hero-base);
 }
 .hero-inner {
   max-width: 360px;
@@ -91,7 +91,7 @@ async function submit() {
   h1 {
     margin: 20px 0 8px;
     font-size: 44px;
-    color: #fff;
+    color: var(--lc-on-fill);
   }
   p {
     margin: 0;

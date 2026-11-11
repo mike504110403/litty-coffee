@@ -12,6 +12,14 @@
       rel="stylesheet"
     />
     <title>Litty Coffee 後台</title>
+    <script>
+      // 首繪前就套上深色 class，避免先閃一下淺色。邏輯需與 src/stores/theme.ts 一致
+      try {
+        var m = localStorage.getItem('lc-theme')
+        var dark = m === 'dark' || (m !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -86,20 +86,20 @@ const steps = [
   place-items: center;
   margin-bottom: 14px;
   &.caramel {
-    background: #f6e6d4;
-    color: #a86a2c;
+    background: var(--lc-tone-caramel-bg);
+    color: var(--lc-tone-caramel-fg);
   }
   &.roast {
-    background: #eee3db;
+    background: var(--lc-tone-roast-bg);
     color: var(--lc-roast);
   }
   &.sage {
-    background: #e4ede2;
-    color: #4f7a4a;
+    background: var(--lc-tone-sage-bg);
+    color: var(--lc-tone-sage-fg);
   }
   &.rose {
-    background: #f6e3e1;
-    color: #a2504a;
+    background: var(--lc-tone-rose-bg);
+    color: var(--lc-tone-rose-fg);
   }
 }
 .stat-value {
@@ -139,8 +139,8 @@ const steps = [
     place-items: center;
     font-size: 13px;
     font-weight: 700;
-    background: var(--lc-latte);
-    color: var(--lc-espresso);
+    background: var(--lc-num-bg);
+    color: var(--lc-num-fg);
   }
   .st-title {
     font-weight: 500;

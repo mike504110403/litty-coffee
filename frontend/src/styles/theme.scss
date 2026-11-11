@@ -14,6 +14,77 @@
   --lc-sidebar-w: 232px;
   --lc-tabbar-h: 64px;
 
+  // ---- 語意 token：淺色值＝改版前元件內寫死的值，深色值在下方 html.dark ----
+  --lc-ink: #3b2a20; // 淺底（latte）上的深字
+  --lc-on-fill: #fff; // 深色／彩色填色上的字
+  --lc-on-primary: #fff; // 主色填色上的字（Element Plus 預設也是白）
+  --lc-sidebar-bg: #3b2a20;
+  --lc-side-line: rgba(255, 255, 255, 0.08); // 側欄上的細線與 logo 描邊
+  --lc-side-hover: rgba(255, 255, 255, 0.06);
+  --lc-danger: #d9534f; // 未讀徽章
+  --lc-topbar-bg: rgba(250, 246, 241, 0.9);
+  --lc-tabbar-bg: rgba(255, 255, 255, 0.95);
+  --lc-tag-mix: #fff; // 顧客標籤的 color-mix 底色
+  --lc-media-bg: #000;
+  --lc-hero-glow-1: rgba(200, 145, 90, 0.35);
+  --lc-hero-glow-2: rgba(107, 74, 53, 0.6);
+  --lc-hero-base: #3b2a20;
+
+  // 中性底色階（由淺到深）
+  --lc-bg-soft: #fbf8f4; // 聊天室／沙盒背景
+  --lc-bg-hover: #f7f1ea; // 列表 hover
+  --lc-bg-hover-2: #faf6f1; // 顧客列 hover
+  --lc-bg-hover-3: #fbf6f0; // 行事曆格 hover
+  --lc-bg-past: #fcfbf9; // 行事曆過去日期
+  --lc-bg-chip: #f1e9df; // 日期分隔 chip
+  --lc-bg-thumb: #efe8df; // 縮圖佔位
+  --lc-bg-track: #efe6db; // 分頁籤軌道
+  --lc-bg-tab-on: #fff; // 分頁籤選中
+  --lc-grab: #ddd3c8; // 手機抽屜把手
+  --lc-faint: #c9beb2; // 行事曆非本月日期
+  --lc-tip-shadow: 0 4px 16px rgba(59, 42, 32, 0.14);
+  --lc-tab-shadow: 0 1px 3px rgba(59, 42, 32, 0.1);
+  --lc-reaction-shadow: 0 1px 2px rgba(59, 42, 32, 0.08);
+
+  // 狀態色（底／字）
+  --lc-ok-bg: #e8f3e6;
+  --lc-ok-fg: #2f5f2b;
+  --lc-warn-bg: #fdf3e7;
+  --lc-warn-fg: #8a5a1c;
+  --lc-warn-line: #f0dfca;
+  --lc-warn-bg-2: #fbf3e9; // 知識庫說明框
+  --lc-fail-bg: #fbe9e7;
+  --lc-fail-fg: #b42318;
+  --lc-info-bg: #eef3fb;
+  --lc-info-fg: #1c5cab;
+  // 色塊圖示／chip 的底與字
+  --lc-tone-caramel-bg: #f6e6d4;
+  --lc-tone-caramel-fg: #a86a2c;
+  --lc-tone-roast-bg: #eee3db;
+  --lc-tone-sage-bg: #e4ede2;
+  --lc-tone-sage-bg-2: #eef3ec;
+  --lc-tone-sage-fg: #4f7a4a;
+  --lc-tone-rose-bg: #f6e3e1;
+  --lc-tone-rose-fg: #a2504a;
+  --lc-tone-amber-fg: #b7791f; // 警示字
+  --lc-delta-good: #006300;
+  --lc-delta-bad: #b42318;
+  --lc-num-bg: #e9d8c4; // 導覽步驟圓圈
+  --lc-num-fg: #3b2a20;
+
+  // 疊在圖片／影片上的遮罩（不隨主題變）
+  --lc-scrim-badge: rgba(0, 0, 0, 0.55);
+  --lc-scrim-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.45));
+  --lc-scrim-btn: rgba(255, 255, 255, 0.9);
+
+  // 圖表（已驗證的類別色；深色值見 html.dark）
+  --lc-chart-1: #2a78d6; // slot 1 藍：自動／單一系列
+  --lc-chart-2: #eb6834; // slot 2 橘：真人
+  --lc-chart-axis-text: #898781;
+  --lc-chart-axis-line: #c3c2b7;
+  --lc-chart-grid: #ecebe5;
+  --lc-chart-tip-bg: #fff;
+
   --el-color-primary: #8b5e3c;
   --el-color-primary-light-3: #ad8e77;
   --el-color-primary-light-5: #c5af9e;
@@ -25,6 +96,135 @@
   --el-font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, 'PingFang TC', sans-serif;
   --el-bg-color-page: var(--lc-cream);
   --el-text-color-primary: var(--lc-text);
+}
+
+// 深色：夜裡的咖啡館——濃縮咖啡色底、奶泡色字，不用冷灰黑。
+// 由 html.dark 啟動（Element Plus 官方深色模式用的 class），其 css-vars 先載入，這裡覆寫成暖色。
+html.dark {
+  color-scheme: dark;
+
+  --lc-espresso: #5a4030; // 選中填色（白字）
+  --lc-on-primary: #2a1c12; // 焦糖色底配深字，白字對比不足
+  --lc-roast: #d0a784; // 當作文字色用
+  --lc-cream: #1a120d; // 頁面底
+  --lc-surface: #251a14; // 卡片
+  --lc-text: #f0e4d7;
+  --lc-muted: #a99888;
+  --lc-border: #3b2d23;
+  --lc-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  --lc-sidebar-bg: #2d1f17;
+  --lc-side-hover: rgba(255, 255, 255, 0.07);
+  --lc-topbar-bg: rgba(26, 18, 13, 0.88);
+  --lc-tabbar-bg: rgba(37, 26, 20, 0.95);
+  --lc-tag-mix: #251a14;
+  --lc-hero-glow-1: rgba(200, 145, 90, 0.28);
+  --lc-hero-glow-2: rgba(107, 74, 53, 0.5);
+  --lc-hero-base: #231710;
+
+  --lc-bg-soft: #1f1611;
+  --lc-bg-hover: #2f221a;
+  --lc-bg-hover-2: #2c2018;
+  --lc-bg-hover-3: #2c2018;
+  --lc-bg-past: #1f1611;
+  --lc-bg-chip: #33251c;
+  --lc-bg-thumb: #33251c;
+  --lc-bg-track: #130d09;
+  --lc-bg-tab-on: #3a2b20;
+  --lc-grab: #5a4a3e;
+  --lc-faint: #6b5a4d;
+  --lc-tip-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --lc-tab-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --lc-reaction-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  --lc-ok-bg: #243a22;
+  --lc-ok-fg: #9bd194;
+  --lc-warn-bg: #3d2b17;
+  --lc-warn-fg: #e6bb7e;
+  --lc-warn-line: #5a4126;
+  --lc-warn-bg-2: #33261a;
+  --lc-fail-bg: #40221f;
+  --lc-fail-fg: #f2a198;
+  --lc-info-bg: #22303f;
+  --lc-info-fg: #8fb9ee;
+  --lc-tone-caramel-bg: #4a3420;
+  --lc-tone-caramel-fg: #e0a465;
+  --lc-tone-roast-bg: #3d2e24;
+  --lc-tone-sage-bg: #2a3a28;
+  --lc-tone-sage-bg-2: #2a3a28;
+  --lc-tone-sage-fg: #8fbf88;
+  --lc-tone-rose-bg: #442624;
+  --lc-tone-rose-fg: #e08a82;
+  --lc-tone-amber-fg: #e0a93c;
+  --lc-delta-good: #6fd06f;
+  --lc-delta-bad: #f08a80;
+  --lc-num-bg: #4a3626;
+  --lc-num-fg: #e9d8c4;
+
+  // 圖表深色階：slot 1/2 取 dataviz palette 的 dark 欄，已用 validate_palette.js --mode dark --surface #251a14 驗證
+  --lc-chart-1: #3987e5;
+  --lc-chart-2: #d95926;
+  --lc-chart-axis-text: #a89a8d;
+  --lc-chart-axis-line: #6b5a4d;
+  --lc-chart-grid: #3a2d24;
+  --lc-chart-tip-bg: #33251c;
+
+  // 主色改用焦糖色（深底上才夠亮），主按鈕改深字
+  --el-color-primary: #c8915a;
+  --el-color-primary-light-3: #946b43;
+  --el-color-primary-light-5: #715234;
+  --el-color-primary-light-7: #4e3824;
+  --el-color-primary-light-8: #3d2b1c;
+  --el-color-primary-light-9: #2b1f15;
+  --el-color-primary-dark-2: #d3a77b;
+
+  --el-bg-color-page: #1a120d;
+  --el-bg-color: #251a14;
+  --el-bg-color-overlay: #2d2019;
+  --el-text-color-primary: #f0e4d7;
+  --el-text-color-regular: #dccdbd;
+  --el-text-color-secondary: #a99888;
+  --el-text-color-placeholder: #8a7a6c;
+  --el-text-color-disabled: #6b5d51;
+  --el-border-color-darker: #6b5a4d;
+  --el-border-color-dark: #5a4a3e;
+  --el-border-color: #4b3b30;
+  --el-border-color-light: #3f3128;
+  --el-border-color-lighter: #3b2d23;
+  --el-border-color-extra-light: #32261e;
+  --el-fill-color-darker: #43322a;
+  --el-fill-color-dark: #3b2c23;
+  --el-fill-color: #33261d;
+  --el-fill-color-light: #2d2119;
+  --el-fill-color-lighter: #281d16;
+  --el-fill-color-extra-light: #231913;
+  --el-fill-color-blank: #251a14;
+  --el-mask-color: rgba(12, 7, 4, 0.8);
+  --el-mask-color-extra-light: rgba(12, 7, 4, 0.3);
+
+  .el-card {
+    --el-card-bg-color: var(--lc-surface);
+  }
+  .el-button--primary {
+    --el-button-text-color: var(--lc-on-primary);
+    --el-button-hover-text-color: var(--lc-on-primary);
+    --el-button-active-text-color: var(--lc-on-primary);
+    --el-button-disabled-text-color: var(--lc-on-primary);
+  }
+  .el-segmented {
+    --el-segmented-item-selected-color: var(--lc-on-primary);
+  }
+  .el-radio-button {
+    --el-radio-button-checked-text-color: var(--lc-on-primary);
+  }
+  .el-checkbox {
+    --el-checkbox-checked-icon-color: var(--lc-on-primary);
+  }
+  .el-date-table td.current:not(.disabled) .el-date-table-cell__text,
+  .el-month-table td.current:not(.disabled) .el-date-table-cell__text,
+  .el-year-table td.current:not(.disabled) .el-date-table-cell__text {
+    color: var(--lc-on-primary);
+  }
 }
 
 * {

@@ -367,8 +367,8 @@ const title = computed(() => {
   gap: 12px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: #e8f3e6;
-  color: #2f5f2b;
+  background: var(--lc-ok-bg);
+  color: var(--lc-ok-fg);
   font-size: 14px;
 }
 .insights-box {
@@ -409,7 +409,7 @@ const title = computed(() => {
   height: 96px;
   border-radius: 12px;
   overflow: hidden;
-  background: #efe8df;
+  background: var(--lc-bg-thumb);
   img,
   video {
     width: 100%;
@@ -423,8 +423,8 @@ const title = computed(() => {
     min-width: 20px;
     height: 20px;
     border-radius: 10px;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
+    background: var(--lc-scrim-badge);
+    color: var(--lc-on-fill);
     font-size: 11px;
     display: grid;
     place-items: center;
@@ -436,13 +436,13 @@ const title = computed(() => {
     justify-content: flex-end;
     gap: 2px;
     padding: 4px;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.45));
+    background: var(--lc-scrim-grad);
     button {
       width: 24px;
       height: 24px;
       border: 0;
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.9);
+      background: var(--lc-scrim-btn);
       display: grid;
       place-items: center;
       cursor: pointer;
@@ -467,7 +467,7 @@ const title = computed(() => {
   }
 }
 .warn {
-  color: #b42318;
+  color: var(--lc-fail-fg);
   font-size: 12px;
   margin: 8px 0 0;
 }
@@ -485,7 +485,7 @@ const title = computed(() => {
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
   .over {
-    color: #b42318;
+    color: var(--lc-fail-fg);
     font-weight: 700;
   }
 }

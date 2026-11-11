@@ -270,7 +270,7 @@ function useExample(e: (typeof examples)[number]) {
   white-space: pre-wrap;
 }
 .handoff {
-  color: #a86a2c;
+  color: var(--lc-tone-caramel-fg);
   font-size: 13px;
 }
 .r-foot {

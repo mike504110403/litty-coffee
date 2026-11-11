@@ -99,7 +99,7 @@ async function refresh() {
     color: var(--lc-muted);
   }
   .err {
-    color: #b42318;
+    color: var(--lc-fail-fg);
   }
 }
 .compact {

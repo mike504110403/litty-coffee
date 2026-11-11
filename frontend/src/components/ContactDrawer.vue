@@ -183,7 +183,7 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
   width: 40px;
   height: 4px;
   border-radius: 2px;
-  background: #ddd3c8;
+  background: var(--lc-grab);
   margin: -8px auto 14px;
 }
 :global(.el-drawer.sheet) {
@@ -259,7 +259,7 @@ h4 {
   border-radius: 999px;
   font-size: 12px;
   line-height: 22px;
-  background: color-mix(in srgb, var(--c) 14%, white);
+  background: color-mix(in srgb, var(--c) 14%, var(--lc-tag-mix));
   color: var(--lc-text);
   &::before {
     content: '';

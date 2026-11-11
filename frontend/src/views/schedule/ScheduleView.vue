@@ -286,7 +286,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   padding: 4px 10px 4px 4px;
   border: 1px dashed var(--lc-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--lc-surface);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -351,18 +351,18 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   cursor: pointer;
   transition: background 0.12s;
   &:hover:not(.past) {
-    background: #fbf6f0;
+    background: var(--lc-bg-hover-3);
   }
   &.other .date {
-    color: #c9beb2;
+    color: var(--lc-faint);
   }
   &.past {
     cursor: default;
-    background: #fcfbf9;
+    background: var(--lc-bg-past);
   }
   &.today .date {
     background: var(--lc-espresso);
-    color: #fff;
+    color: var(--lc-on-fill);
   }
 }
 .date {
@@ -388,7 +388,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   font-size: 11px;
   text-align: left;
   cursor: pointer;
-  background: #eef3fb;
+  background: var(--lc-info-bg);
   color: var(--lc-text);
   img {
     width: 18px;
@@ -411,13 +411,13 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
     color: var(--lc-muted);
   }
   &.published {
-    background: #e8f3e6;
+    background: var(--lc-ok-bg);
   }
   &.failed {
-    background: #fbe9e7;
+    background: var(--lc-fail-bg);
   }
   &.publishing {
-    background: #fdf3e7;
+    background: var(--lc-warn-bg);
   }
 }
 
@@ -487,7 +487,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
 .ag-err {
   margin: 4px 0 0;
   font-size: 12px;
-  color: #b42318;
+  color: var(--lc-fail-fg);
 }
 .badge {
   margin-left: auto;
@@ -499,20 +499,20 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   border-radius: 999px;
   background: var(--lc-cream);
   &.scheduled {
-    background: #eef3fb;
-    color: #1c5cab;
+    background: var(--lc-info-bg);
+    color: var(--lc-info-fg);
   }
   &.published {
-    background: #e8f3e6;
-    color: #2f5f2b;
+    background: var(--lc-ok-bg);
+    color: var(--lc-ok-fg);
   }
   &.failed {
-    background: #fbe9e7;
-    color: #b42318;
+    background: var(--lc-fail-bg);
+    color: var(--lc-fail-fg);
   }
   &.publishing {
-    background: #fdf3e7;
-    color: #8a5a1c;
+    background: var(--lc-warn-bg);
+    color: var(--lc-warn-fg);
   }
 }
 .spin {

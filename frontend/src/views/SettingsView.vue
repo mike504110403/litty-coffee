@@ -4,6 +4,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
 import { settingsApi, type IgAccount, type SettingsInfo } from '@/api/settings'
+import { useThemeStore, type ThemeMode } from '@/stores/theme'
+
+const theme = useThemeStore()
+const themeOptions: { label: string; value: ThemeMode }[] = [
+  { label: '跟隨系統', value: 'system' },
+  { label: '淺色', value: 'light' },
+  { label: '深色', value: 'dark' },
+]
 
 const route = useRoute()
 const router = useRouter()
@@ -314,6 +322,18 @@ async function savePassword() {
       </dl>
     </section>
 
+    <!-- 外觀 -->
+    <section class="lc-card block">
+      <h2>外觀</h2>
+      <el-segmented
+        :model-value="theme.mode"
+        :options="themeOptions"
+        aria-label="外觀模式"
+        @update:model-value="(v: string | number | boolean) => theme.setMode(v as ThemeMode)"
+      />
+      <p class="muted theme-hint">「跟隨系統」會隨裝置的淺色／深色設定自動切換；選擇只記在這個瀏覽器。</p>
+    </section>
+
     <!-- 管理員密碼 -->
     <section class="lc-card block">
       <h2>管理員密碼</h2>
@@ -371,7 +391,7 @@ async function savePassword() {
     display: grid;
     place-items: center;
     background: var(--lc-caramel);
-    color: #fff;
+    color: var(--lc-on-fill);
     font-size: 22px;
     font-weight: 600;
   }
@@ -433,6 +453,9 @@ async function savePassword() {
   .el-button {
     flex: none;
   }
+}
+.theme-hint {
+  margin: 10px 0 0;
 }
 .missing,
 .muted {

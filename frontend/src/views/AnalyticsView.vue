@@ -8,9 +8,10 @@ import BarList from '@/components/charts/BarList.vue'
 import { delta, formatCount, formatDuration, formatPercent } from '@/utils/format'
 
 // 已驗證的類別色（自動＝slot 1 藍、真人＝slot 2 橘）；單一系列數量圖用藍
-const C_AUTO = '#2a78d6'
-const C_HUMAN = '#eb6834'
-const C_SINGLE = '#2a78d6'
+// 色值定義在 styles/theme.scss（--lc-chart-*），淺／深色各有一組已驗證的階
+const C_AUTO = 'var(--lc-chart-1)'
+const C_HUMAN = 'var(--lc-chart-2)'
+const C_SINGLE = 'var(--lc-chart-1)'
 
 const days = ref(7)
 const ranges = [
@@ -335,10 +336,10 @@ const busiest = computed(() => {
 .t-delta {
   font-weight: 700;
   &.good {
-    color: #006300;
+    color: var(--lc-delta-good);
   }
   &.bad {
-    color: #b42318;
+    color: var(--lc-delta-bad);
   }
 }
 .vs {
@@ -353,8 +354,8 @@ const busiest = computed(() => {
   padding: 10px 14px;
   margin-bottom: 14px;
   border-radius: 12px;
-  background: #fdf3e7;
-  color: #8a5a1c;
+  background: var(--lc-warn-bg);
+  color: var(--lc-warn-fg);
   font-size: 13px;
 }
 .grid {

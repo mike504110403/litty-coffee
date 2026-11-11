@@ -151,20 +151,20 @@ const multi = computed(() => props.series.length > 1)
     right: 8px;
     transform: translateY(50%);
     font-size: 11px;
-    color: #898781;
+    color: var(--lc-chart-axis-text);
     font-variant-numeric: tabular-nums;
   }
 }
 .area {
   position: relative;
-  border-bottom: 1px solid #c3c2b7;
+  border-bottom: 1px solid var(--lc-chart-axis-line);
 }
 .grid {
   position: absolute;
   left: 0;
   right: 0;
   height: 1px;
-  background: #ecebe5;
+  background: var(--lc-chart-grid);
 }
 .cols {
   position: absolute;
@@ -204,7 +204,7 @@ const multi = computed(() => props.series.length > 1)
     flex: 1;
     text-align: center;
     font-size: 11px;
-    color: #898781;
+    color: var(--lc-chart-axis-text);
     padding-top: 4px;
     white-space: nowrap;
     overflow: visible;
@@ -219,8 +219,8 @@ const multi = computed(() => props.series.length > 1)
   white-space: nowrap;
   padding: 8px 10px;
   border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 4px 16px rgba(59, 42, 32, 0.14);
+  background: var(--lc-chart-tip-bg);
+  box-shadow: var(--lc-tip-shadow);
   border: 1px solid var(--lc-border);
   font-size: 12px;
   pointer-events: none;

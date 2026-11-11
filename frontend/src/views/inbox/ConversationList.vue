@@ -118,7 +118,7 @@ const count = (k: Tab) =>
   cursor: pointer;
   &.on {
     background: var(--lc-espresso);
-    color: #fff;
+    color: var(--lc-on-fill);
   }
 }
 .tab-count {
@@ -126,7 +126,7 @@ const count = (k: Tab) =>
   padding: 0 6px;
   border-radius: 999px;
   background: var(--lc-caramel);
-  color: #fff;
+  color: var(--lc-on-fill);
 }
 .items {
   flex: 1;
@@ -148,7 +148,7 @@ const count = (k: Tab) =>
   cursor: pointer;
   transition: background 0.12s;
   &:hover {
-    background: #f7f1ea;
+    background: var(--lc-bg-hover);
   }
   &.active {
     background: var(--el-color-primary-light-9);
@@ -196,8 +196,8 @@ const count = (k: Tab) =>
   height: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  background: #d9534f;
-  color: #fff;
+  background: var(--lc-danger);
+  color: var(--lc-on-fill);
   font-size: 11px;
   font-weight: 700;
   display: grid;
@@ -214,12 +214,12 @@ const count = (k: Tab) =>
   padding: 1px 8px;
   border-radius: 999px;
   &.bot {
-    background: #eef3ec;
-    color: #4f7a4a;
+    background: var(--lc-tone-sage-bg-2);
+    color: var(--lc-tone-sage-fg);
   }
   &.human {
-    background: #f6e6d4;
-    color: #a86a2c;
+    background: var(--lc-tone-caramel-bg);
+    color: var(--lc-tone-caramel-fg);
   }
 }
 .handle {

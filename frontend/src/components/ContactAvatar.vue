@@ -29,7 +29,7 @@ const bg = computed(() => {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--lc-on-fill);
   font-weight: 700;
   overflow: hidden;
 }

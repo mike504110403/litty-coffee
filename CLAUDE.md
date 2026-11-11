@@ -47,8 +47,8 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 標籤 `tags`／`contact_tags`；顧客清單一次查詢帶出標籤（json_agg）與互動數
 - 分析 `GET /api/analytics/summary?days=N`：依店家時區（`TZ_STORE`，預設 Asia/Taipei；binary 內嵌 tzdata）切日；同時回前一個等長區間供漲跌
 - 回應時間口徑：顧客「開啟回合」（前一則不是顧客訊息）到店家第一則回覆；同回合連傳只算一次
-- 圖表色：自動＝`#2a78d6`、真人＝`#eb6834`（dataviz 參考色盤 slot 1/2，已跑 validator；咖啡色系配色 chroma 不足或紅綠色盲分不開，故不用）；單一系列一律 `#2a78d6`
-- App 目前只有淺色模式，圖表未做深色版
+- 圖表色：淺色 自動＝`#2a78d6`、真人＝`#eb6834`；深色 自動＝`#3987e5`、真人＝`#d95926`（surface `#251a14`）。dataviz 參考色盤 slot 1/2，兩模式都跑過 validator；咖啡色系配色 chroma 不足或紅綠色盲分不開，故不用。單一系列一律用 slot 1。元件一律用 `--lc-chart-*` 變數
+- 深色模式：`html.dark`＋Element Plus 官方 dark css-vars，再以 `theme.scss` 的 `html.dark` 覆寫成暖棕色系；設定頁「外觀」選 跟隨系統／淺色／深色（localStorage `lc-theme`，`index.html` 內聯腳本防首繪閃白）；主色填色上的字在深色用深字（白字對焦糖底對比不足）。`IgPreview` 刻意維持 IG 淺色外觀
 
 ## 貼文排程
 

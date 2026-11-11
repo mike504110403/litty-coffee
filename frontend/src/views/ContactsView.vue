@@ -128,7 +128,7 @@ function onUpdated(c: CrmContact) {
   padding: 5px 12px;
   border: 1px solid var(--lc-border);
   border-radius: 999px;
-  background: #fff;
+  background: var(--lc-surface);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -145,7 +145,7 @@ function onUpdated(c: CrmContact) {
   &.on {
     border-color: var(--lc-espresso);
     background: var(--lc-espresso);
-    color: #fff;
+    color: var(--lc-on-fill);
     span {
       color: var(--lc-latte);
     }
@@ -172,7 +172,7 @@ function onUpdated(c: CrmContact) {
     border-bottom: 0;
   }
   &:hover {
-    background: #faf6f1;
+    background: var(--lc-bg-hover-2);
   }
 }
 .main {
@@ -204,8 +204,8 @@ function onUpdated(c: CrmContact) {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--c) 14%, white);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 35%, white);
+  background: color-mix(in srgb, var(--c) 14%, var(--lc-tag-mix));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 35%, var(--lc-tag-mix));
 }
 .note {
   font-size: 12px;

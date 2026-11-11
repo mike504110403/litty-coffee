@@ -4,7 +4,7 @@ import { computed } from 'vue'
 // 排行用的水平長條：名稱在左、長條＋數值在右；單一系列不需圖例
 const props = withDefaults(
   defineProps<{ items: { label: string; value: number }[]; color?: string; emptyText?: string }>(),
-  { color: '#2a78d6', emptyText: '還沒有資料' },
+  { color: 'var(--lc-chart-1)', emptyText: '還沒有資料' },
 )
 
 const max = computed(() => Math.max(...props.items.map((i) => i.value), 1))

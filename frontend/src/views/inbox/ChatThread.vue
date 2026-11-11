@@ -227,7 +227,7 @@ const handler = computed({
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #fbf8f4;
+  background: var(--lc-bg-soft);
 }
 .t-head {
   display: flex;
@@ -277,7 +277,7 @@ const handler = computed({
   span {
     font-size: 12px;
     color: var(--lc-muted);
-    background: #f1e9df;
+    background: var(--lc-bg-chip);
     padding: 3px 10px;
     border-radius: 999px;
   }
@@ -302,13 +302,13 @@ const handler = computed({
   word-break: break-word;
   white-space: pre-wrap;
   &.contact {
-    background: #fff;
+    background: var(--lc-surface);
     border: 1px solid var(--lc-border);
     border-bottom-left-radius: 6px;
   }
   &.human {
     background: var(--lc-espresso);
-    color: #fff;
+    color: var(--lc-on-fill);
     border-bottom-right-radius: 6px;
   }
   &.ai,
@@ -347,7 +347,7 @@ const handler = computed({
   border-radius: 12px;
   background: var(--lc-surface);
   border: 1px solid var(--lc-border);
-  box-shadow: 0 1px 2px rgba(59, 42, 32, 0.08);
+  box-shadow: var(--lc-reaction-shadow);
 }
 .msg.in .reaction {
   right: auto;
@@ -365,7 +365,7 @@ const handler = computed({
 .video {
   height: auto;
   max-height: 320px;
-  background: #000;
+  background: var(--lc-media-bg);
 }
 .audio {
   display: block;
@@ -394,7 +394,7 @@ const handler = computed({
   font-weight: 500;
   &.ai,
   &.bot {
-    color: #4f7a4a;
+    color: var(--lc-tone-sage-fg);
   }
   &.human {
     color: var(--lc-roast);
@@ -408,15 +408,15 @@ const handler = computed({
 .window {
   font-size: 12px;
   margin: 0 4px 8px;
-  color: #4f7a4a;
+  color: var(--lc-tone-sage-fg);
   &.warn {
-    color: #b7791f;
+    color: var(--lc-tone-amber-fg);
   }
   &.human {
-    color: #a86a2c;
+    color: var(--lc-tone-caramel-fg);
   }
   &.closed {
-    color: #a2504a;
+    color: var(--lc-tone-rose-fg);
   }
 }
 .composer {

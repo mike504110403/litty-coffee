@@ -112,7 +112,7 @@ async function onLogout() {
   display: flex;
   flex-direction: column;
   padding: 20px 14px;
-  background: var(--lc-espresso);
+  background: var(--lc-sidebar-bg);
   color: var(--lc-latte);
 }
 
@@ -126,11 +126,11 @@ async function onLogout() {
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px var(--lc-side-line);
 }
 .brand-name {
   font-size: 18px;
-  color: #fff;
+  color: var(--lc-on-fill);
 }
 .brand-sub {
   font-size: 12px;
@@ -156,11 +156,11 @@ async function onLogout() {
   transition: background 0.15s, opacity 0.15s;
   &:hover {
     opacity: 1;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--lc-side-hover);
   }
   &.is-active {
     opacity: 1;
-    color: var(--lc-espresso);
+    color: var(--lc-ink);
     background: var(--lc-latte);
     font-weight: 500;
   }
@@ -172,8 +172,8 @@ async function onLogout() {
   height: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  background: #d9534f;
-  color: #fff;
+  background: var(--lc-danger);
+  color: var(--lc-on-fill);
   font-size: 11px;
   font-weight: 700;
   display: grid;
@@ -188,7 +188,7 @@ async function onLogout() {
   align-items: center;
   gap: 10px;
   padding: 12px 8px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--lc-side-line);
   .who {
     flex: 1;
     font-size: 14px;
@@ -207,7 +207,7 @@ async function onLogout() {
   display: grid;
   place-items: center;
   background: var(--lc-caramel);
-  color: #fff;
+  color: var(--lc-on-fill);
   font-weight: 700;
   font-size: 14px;
   cursor: pointer;
@@ -239,7 +239,7 @@ async function onLogout() {
     height: 56px;
     padding: 0 16px;
     padding-top: env(safe-area-inset-top);
-    background: rgba(250, 246, 241, 0.9);
+    background: var(--lc-topbar-bg);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--lc-border);
   }
@@ -258,7 +258,7 @@ async function onLogout() {
     display: flex;
     height: calc(var(--lc-tabbar-h) + env(safe-area-inset-bottom));
     padding-bottom: env(safe-area-inset-bottom);
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--lc-tabbar-bg);
     backdrop-filter: blur(12px);
     border-top: 1px solid var(--lc-border);
   }

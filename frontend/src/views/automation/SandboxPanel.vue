@@ -129,7 +129,7 @@ function onKeydown(ev: Event | KeyboardEvent) {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  background: #fbf8f4;
+  background: var(--lc-bg-soft);
 }
 .s-empty {
   text-align: center;
@@ -137,7 +137,7 @@ function onKeydown(ev: Event | KeyboardEvent) {
   font-size: 14px;
   padding-top: 24px;
   .warn {
-    color: #b7791f;
+    color: var(--lc-tone-amber-fg);
     font-size: 13px;
   }
 }
@@ -173,16 +173,16 @@ function onKeydown(ev: Event | KeyboardEvent) {
 }
 .in .bubble {
   background: var(--lc-espresso);
-  color: #fff;
+  color: var(--lc-on-fill);
   border-bottom-right-radius: 6px;
 }
 .out .bubble {
-  background: #fff;
+  background: var(--lc-surface);
   border: 1px solid var(--lc-border);
   border-bottom-left-radius: 6px;
   &.handoff {
-    background: #fdf3e7;
-    border-color: #f0dfca;
+    background: var(--lc-warn-bg);
+    border-color: var(--lc-warn-line);
   }
 }
 .trace {
@@ -204,10 +204,10 @@ function onKeydown(ev: Event | KeyboardEvent) {
     color: var(--lc-roast);
   }
   &.ai {
-    color: #4f7a4a;
+    color: var(--lc-tone-sage-fg);
   }
   &.handoff {
-    color: #a86a2c;
+    color: var(--lc-tone-caramel-fg);
   }
 }
 .typing {
