@@ -12,6 +12,7 @@ import (
 	"time"
 	_ "time/tzdata" // 容器內沒有系統時區資料時也能載入店家時區
 
+	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
@@ -80,12 +81,25 @@ func main() {
 
 	api.Media = &media.Store{DB: pool, Dir: cfg.MediaDir, PublicBase: cfg.PublicBaseURL}
 	api.Posts = posts.NewService(pool, api.Media)
-	var publisher ig.Publisher = ig.NewClient(cfg.IGAPIBase)
-	pubToken := cfg.IGAccessToken
-	if cfg.DevSimulator {
-		publisher, pubToken = ig.NewFakePublisher(), "dev-token"
+	// IG 帳號連結：設定頁 OAuth；模擬模式下授權頁直接導回，連上模擬器的假商家帳號
+	api.Info = httpapi.SystemInfo{WebOrigin: cfg.WebOrigin, PublicBaseURL: cfg.PublicBaseURL, IGAppIDSet: cfg.IGAppID != "",
+		IGSecretSet: cfg.IGAppSecret != "", AIKeySet: cfg.AnthropicAPIKey != "", Timezone: cfg.Timezone}
+	api.Accounts = &account.Service{DB: pool, FallbackToken: cfg.IGAccessToken}
+	redirectURI := cfg.WebOrigin + "/api/ig/oauth/callback"
+	switch {
+	case cfg.DevSimulator:
+		api.Accounts.OAuth = ig.NewFakeOAuth(redirectURI, httpapi.DevAccountID)
+	case cfg.IGAppID != "" && cfg.IGAppSecret != "":
+		api.Accounts.OAuth = ig.NewOAuthClient(cfg.IGAppID, cfg.IGAppSecret, redirectURI, cfg.IGAPIBase)
 	}
-	go (&posts.Scheduler{Svc: api.Posts, IG: publisher, Token: pubToken}).Run(ctx)
+	go api.Accounts.RunRefresher(ctx)
+
+	scheduler := &posts.Scheduler{Svc: api.Posts, IG: ig.NewClient(cfg.IGAPIBase), TokenFunc: api.Accounts.Token}
+	if cfg.DevSimulator {
+		scheduler.IG, scheduler.TokenFunc = ig.NewFakePublisher(), nil
+		scheduler.Token = "dev-token"
+	}
+	go scheduler.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,

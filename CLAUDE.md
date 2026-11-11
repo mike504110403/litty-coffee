@@ -51,8 +51,18 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 媒體：`POST /api/media` 存到 `MEDIA_DIR`（預設 `./data/media`，不進 git），以公開路徑 `/media/{隨機檔名}` 提供；IG 從 `PUBLIC_BASE_URL` + 該路徑抓檔，所以正式環境必須是 IG 抓得到的 HTTPS。PNG 一律轉 JPEG（IG 只收 JPEG），透明處補白
 - 狀態：draft → scheduled → publishing → published｜failed。失敗自動重試共 3 次（1 分、5 分後），用盡才 failed；failed 可修改後重新排程（計數歸零）
 - 中斷復原：publishing 超過 10 分鐘視為中斷；有 `ig_container_id` 時先查容器狀態，PUBLISHED 即直接標已發佈，不重發
-- 發佈 token：`IG_ACCESS_TOKEN`（DEV_SIMULATOR=1 時走 `ig.FakePublisher`）
+- 發佈 token：設定頁連結帳號的 token（`account.Service.Token`），沒連結才用 `IG_ACCESS_TOKEN` 兜底（DEV_SIMULATOR=1 時走 `ig.FakePublisher`）
 - AI 寫文案：`POST /api/posts/caption`，沿用自動回覆的人設與知識庫
+
+## 設定頁／IG 帳號連結
+
+- OAuth：Business Login for Instagram（`internal/ig/oauth.go`）。`IG_APP_ID`＋`IG_APP_SECRET` 齊全才開；redirect URI＝`WEB_ORIGIN/api/ig/oauth/callback`（Meta 後台登記同一個，須 HTTPS）
+- 流程：`/api/ig/oauth/start` 產 state 放 cookie（10 分、一次性）→ IG 授權 → callback 驗 state → code 換短效 → 長效 60 天 → `/me` 取 `user_id`（＝webhook entry.id）→ 訂閱 messages webhook → 導回 `/settings?ig=connected|ig_error=`
+- 同時只有一個已連結帳號（有 token 者）；連新帳號會清掉舊帳號 token，但顧客／對話保留；斷開同理
+- 續期：背景每 6 小時，剩 20 天內續 60 天；IG 規定 token 滿 24 小時才能續；失敗寫 `ig_accounts.last_error` 顯示在設定頁，下輪再試；已過期只能重新連結
+- 個人帳號（account_type=PERSONAL）拒絕連結
+- 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上模擬器帳號 `dev-litty-coffee`
+- 改密碼：`POST /api/auth/password`，既有 session 不撤銷
 
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
@@ -61,7 +71,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 已發佈貼文的成效（Insights API）未接
 - 收到的媒體 URL 會過期：目前只存 URL，需改為即時下載到自有儲存
 - 已讀、reaction、訊息收回等 webhook 事件尚未處理（worker 直接略過）
-- ig_accounts.access_token 目前由 env 兜底；設定頁做 OAuth 後改存 DB 並處理 60 天換發
+- IG OAuth 真實流程尚未實測（需 Meta App＋HTTPS 網址）；token 以明文存 DB，畢業總審時評估加密
 
 ## IG API 限制（設計時以此為準）
 

@@ -306,7 +306,7 @@ func TestNoTokenFailsCleanly(t *testing.T) {
 	sc, _ := newScheduler(s)
 	sc.Token = ""
 	_, _ = sc.RunOnce(ctx, now.Add(time.Second))
-	if got, _ := s.Get(ctx, p.ID); got.Status != "scheduled" || !strings.Contains(got.Error, "IG_ACCESS_TOKEN") {
+	if got, _ := s.Get(ctx, p.ID); got.Status != "scheduled" || !strings.Contains(got.Error, "尚未連結 IG 帳號") {
 		t.Fatalf("no token: %+v", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
@@ -33,6 +34,8 @@ type Server struct {
 	Media     *media.Store
 	Posts     *posts.Service
 	CaptionAI *automation.AI // nil＝沒設 key
+	Accounts  *account.Service
+	Info      SystemInfo
 
 	IGAppSecret   string
 	IGVerifyToken string
@@ -64,6 +67,7 @@ func (s *Server) Routes() http.Handler {
 			s.automationRoutes(r)
 			s.crmRoutes(r)
 			s.postRoutes(r)
+			s.settingsRoutes(r)
 			r.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
 			})

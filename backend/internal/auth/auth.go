@@ -109,3 +109,25 @@ func (s *Service) Me(ctx context.Context, id int64) (User, error) {
 		Scan(&u.ID, &u.Username, &u.DisplayName)
 	return u, err
 }
+
+var ErrWeakPassword = errors.New("新密碼至少 8 個字元")
+
+// ChangePassword 驗舊密碼後換新密碼。既有 session 不撤銷（單一店家、少量管理員）。
+func (s *Service) ChangePassword(ctx context.Context, id int64, current, next string) error {
+	if len(next) < 8 {
+		return ErrWeakPassword
+	}
+	var hash string
+	if err := s.DB.QueryRow(ctx, `SELECT password_hash FROM admin_users WHERE id = $1`, id).Scan(&hash); err != nil {
+		return err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(current)) != nil {
+		return ErrBadCredentials
+	}
+	nh, err := bcrypt.GenerateFromPassword([]byte(next), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(ctx, `UPDATE admin_users SET password_hash = $2 WHERE id = $1`, id, string(nh))
+	return err
+}

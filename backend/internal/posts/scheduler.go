@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 	"github.com/mike504110403/litty-coffee/backend/internal/media"
 )
@@ -17,12 +16,13 @@ import (
 type Scheduler struct {
 	Svc          *Service
 	IG           ig.Publisher
-	Token        string
-	PollInterval time.Duration // 容器處理中時的輪詢間隔
-	PollTimeout  time.Duration // 影片處理最久等多久
-	StaleAfter   time.Duration // publishing 超過這段時間視為中斷
+	Token        string                                    // 固定 token（測試、模擬器）
+	TokenFunc    func(ctx context.Context) (string, error) // 非 nil 時每次發文前取（設定頁連結的帳號）
+	PollInterval time.Duration                             // 容器處理中時的輪詢間隔
+	PollTimeout  time.Duration                             // 影片處理最久等多久
+	StaleAfter   time.Duration                             // publishing 超過這段時間視為中斷
 
-	userID string
+	userID, userTok string
 }
 
 var retryBackoff = []time.Duration{time.Minute, 5 * time.Minute}
@@ -103,23 +103,34 @@ UPDATE scheduled_posts SET status = 'scheduled', error = $2, next_attempt_at = $
 	return err
 }
 
-func (sc *Scheduler) uid(ctx context.Context) (string, error) {
-	if sc.userID != "" {
+func (sc *Scheduler) uid(ctx context.Context, tok string) (string, error) {
+	if sc.userID != "" && sc.userTok == tok {
 		return sc.userID, nil
 	}
-	id, err := sc.IG.UserID(ctx, sc.Token)
+	id, err := sc.IG.UserID(ctx, tok)
 	if err != nil {
 		return "", fmt.Errorf("查 IG 帳號失敗：%w", err)
 	}
-	sc.userID = id
+	sc.userID, sc.userTok = id, tok
 	return id, nil
 }
 
-func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink string, err error) {
-	if sc.Token == "" {
-		return "", "", errors.New("尚未設定 IG_ACCESS_TOKEN")
+func (sc *Scheduler) token(ctx context.Context) (string, error) {
+	if sc.TokenFunc != nil {
+		return sc.TokenFunc(ctx)
 	}
-	userID, err := sc.uid(ctx)
+	if sc.Token == "" {
+		return "", errors.New("尚未連結 IG 帳號（到「設定」連結）")
+	}
+	return sc.Token, nil
+}
+
+func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink string, err error) {
+	tok, err := sc.token(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	userID, err := sc.uid(ctx, tok)
 	if err != nil {
 		return "", "", err
 	}
@@ -127,7 +138,7 @@ func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink st
 	// 中斷復原：已有容器時先看 IG 端狀態
 	container := p.containerID
 	if container != "" {
-		st, err := sc.IG.ContainerStatus(ctx, sc.Token, container)
+		st, err := sc.IG.ContainerStatus(ctx, tok, container)
 		switch {
 		case err != nil:
 			return "", "", err
@@ -143,7 +154,7 @@ func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink st
 		if err != nil {
 			return "", "", err
 		}
-		container, err = sc.buildContainer(ctx, userID, p)
+		container, err = sc.buildContainer(ctx, userID, tok, p)
 		if err != nil {
 			return "", "", err
 		}
@@ -151,14 +162,14 @@ func (sc *Scheduler) publish(ctx context.Context, p Post) (mediaID, permalink st
 			return "", "", err
 		}
 	}
-	if err := sc.waitFinished(ctx, container); err != nil {
+	if err := sc.waitFinished(ctx, tok, container); err != nil {
 		return "", "", err
 	}
-	mediaID, err = sc.IG.Publish(ctx, userID, sc.Token, container)
+	mediaID, err = sc.IG.Publish(ctx, userID, tok, container)
 	if err != nil {
 		return "", "", err
 	}
-	permalink, _ = sc.IG.Permalink(ctx, sc.Token, mediaID) // 拿不到不影響發佈結果
+	permalink, _ = sc.IG.Permalink(ctx, tok, mediaID) // 拿不到不影響發佈結果
 	return mediaID, permalink, nil
 }
 
@@ -175,7 +186,7 @@ UPDATE scheduled_posts SET status = 'published', error = '', published_at = COAL
 	return errAlreadyPublished
 }
 
-func (sc *Scheduler) buildContainer(ctx context.Context, userID string, p Post) (string, error) {
+func (sc *Scheduler) buildContainer(ctx context.Context, userID, tok string, p Post) (string, error) {
 	spec := func(a media.Asset) ig.ContainerSpec {
 		u := sc.Svc.Media.PublicURL(a.Filename)
 		if a.Kind == "video" {
@@ -187,15 +198,15 @@ func (sc *Scheduler) buildContainer(ctx context.Context, userID string, p Post) 
 	case "image":
 		s := spec(p.Media[0])
 		s.Caption = p.Caption
-		return sc.IG.CreateContainer(ctx, userID, sc.Token, s)
+		return sc.IG.CreateContainer(ctx, userID, tok, s)
 	case "reel":
 		s := spec(p.Media[0])
 		s.MediaType, s.Caption = "REELS", p.Caption
-		return sc.IG.CreateContainer(ctx, userID, sc.Token, s)
+		return sc.IG.CreateContainer(ctx, userID, tok, s)
 	case "story":
 		s := spec(p.Media[0])
 		s.MediaType = "STORIES"
-		return sc.IG.CreateContainer(ctx, userID, sc.Token, s)
+		return sc.IG.CreateContainer(ctx, userID, tok, s)
 	case "carousel":
 		var children []string
 		for _, a := range p.Media {
@@ -204,21 +215,21 @@ func (sc *Scheduler) buildContainer(ctx context.Context, userID string, p Post) 
 			if a.Kind == "video" {
 				s.MediaType = "VIDEO"
 			}
-			id, err := sc.IG.CreateContainer(ctx, userID, sc.Token, s)
+			id, err := sc.IG.CreateContainer(ctx, userID, tok, s)
 			if err != nil {
 				return "", fmt.Errorf("輪播第 %d 個項目：%w", len(children)+1, err)
 			}
-			if err := sc.waitFinished(ctx, id); err != nil {
+			if err := sc.waitFinished(ctx, tok, id); err != nil {
 				return "", err
 			}
 			children = append(children, id)
 		}
-		return sc.IG.CreateContainer(ctx, userID, sc.Token, ig.ContainerSpec{MediaType: "CAROUSEL", Children: children, Caption: p.Caption})
+		return sc.IG.CreateContainer(ctx, userID, tok, ig.ContainerSpec{MediaType: "CAROUSEL", Children: children, Caption: p.Caption})
 	}
 	return "", fmt.Errorf("unknown kind %q", p.Kind)
 }
 
-func (sc *Scheduler) waitFinished(ctx context.Context, container string) error {
+func (sc *Scheduler) waitFinished(ctx context.Context, tok, container string) error {
 	interval, timeout := sc.PollInterval, sc.PollTimeout
 	if interval <= 0 {
 		interval = 3 * time.Second
@@ -228,7 +239,7 @@ func (sc *Scheduler) waitFinished(ctx context.Context, container string) error {
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		st, err := sc.IG.ContainerStatus(ctx, sc.Token, container)
+		st, err := sc.IG.ContainerStatus(ctx, tok, container)
 		if err != nil {
 			return err
 		}
@@ -251,4 +262,3 @@ func (sc *Scheduler) waitFinished(ctx context.Context, container string) error {
 		}
 	}
 }
-

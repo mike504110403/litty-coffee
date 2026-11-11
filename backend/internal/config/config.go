@@ -14,9 +14,10 @@ type Config struct {
 	WebOrigin     string
 
 	// Instagram
-	IGAppSecret   string // 驗 webhook X-Hub-Signature-256
+	IGAppID       string // Instagram 登入的 App ID（設定頁 OAuth 連結用）
+	IGAppSecret   string // 驗 webhook X-Hub-Signature-256；也用於 OAuth 換 token
 	IGVerifyToken string // webhook 訂閱驗證
-	IGAccessToken string // 長效 token（MVP 先放 env，之後搬到設定頁）
+	IGAccessToken string // 兜底用：設定頁沒連結帳號時才用
 	IGAPIBase     string
 	DevSimulator  bool // true＝不打真 IG：送訊走假 sender、開放 /api/dev/simulate
 
@@ -39,6 +40,7 @@ func Load() (Config, error) {
 		AdminUser:       env("ADMIN_USER", "admin"),
 		AdminPassword:   os.Getenv("ADMIN_PASSWORD"),
 		WebOrigin:       env("WEB_ORIGIN", "http://localhost:5190"),
+		IGAppID:         os.Getenv("IG_APP_ID"),
 		IGAppSecret:     os.Getenv("IG_APP_SECRET"),
 		IGVerifyToken:   os.Getenv("IG_VERIFY_TOKEN"),
 		IGAccessToken:   os.Getenv("IG_ACCESS_TOKEN"),
