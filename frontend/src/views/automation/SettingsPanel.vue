@@ -3,9 +3,11 @@ import HelpTip from '@/components/HelpTip.vue'
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { automationApi, type AutoSettings } from '@/api/automation'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const props = defineProps<{ aiConfigured: boolean; accountId: number }>()
 
+const isMobile = useIsMobile() // 手機時間欄位不可打字，避免彈出鍵盤
 const form = ref<AutoSettings | null>(null)
 const saving = ref(false)
 
@@ -111,6 +113,7 @@ async function save() {
           end="23:30"
           step="00:30"
           :clearable="false"
+          :editable="!isMobile"
           class="digest-time"
         />
       </el-form-item>

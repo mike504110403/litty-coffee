@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, MagicStick, Link } from '@element-plus/icons-vue'
+import { ArrowDown, Loading, MagicStick, Link } from '@element-plus/icons-vue'
 import {
   countHashtags,
   kindLabels,
@@ -38,7 +38,7 @@ const form = reactive({
   when: null as Date | null,
 })
 const readonly = computed(() => !!props.post && ['publishing', 'published'].includes(props.post.status))
-const mobileTab = ref<'edit' | 'preview'>('edit')
+const previewOpen = ref(false) // 手機：預覽收在最下面，點開才顯示
 
 watch(visible, (v) => {
   if (!v) return
@@ -49,7 +49,7 @@ watch(visible, (v) => {
   form.caption = p?.caption ?? ''
   form.media = [...(p?.media ?? [])]
   form.when = p?.scheduledAt ? new Date(p.scheduledAt) : props.defaultDate
-  mobileTab.value = 'edit'
+  previewOpen.value = false
   aiBrief.value = ''
   aiGen++
   aiBusy.value = false
@@ -186,18 +186,8 @@ const title = computed(() => {
 
 <template>
   <el-dialog v-model="visible" :title="title" :fullscreen="isMobile" width="960px" top="5vh" destroy-on-close class="composer">
-    <el-segmented
-      v-if="isMobile"
-      v-model="mobileTab"
-      :options="[
-        { label: '編輯', value: 'edit' },
-        { label: '預覽', value: 'preview' },
-      ]"
-      block
-      class="m-tabs"
-    />
     <div class="layout">
-      <div v-show="!isMobile || mobileTab === 'edit'" class="edit">
+      <div class="edit">
         <el-alert
           v-if="post?.status === 'failed'"
           type="error"
@@ -259,7 +249,7 @@ const title = computed(() => {
             <el-input
               v-model="form.caption"
               type="textarea"
-              :autosize="{ minRows: 5, maxRows: 12 }"
+              :autosize="isMobile ? { minRows: 5 } : { minRows: 5, maxRows: 12 }"
               :disabled="readonly || aiBusy"
               placeholder="寫點什麼…"
             />
@@ -285,6 +275,8 @@ const title = computed(() => {
             :disabled="readonly"
             :disabled-date="disabledDate"
             :clearable="true"
+            :editable="!isMobile"
+            popper-class="lc-picker-popper"
             class="picker"
           />
           <div v-if="bestHours.length && !readonly" class="best">
@@ -294,7 +286,7 @@ const title = computed(() => {
         </div>
       </div>
 
-      <div v-show="!isMobile || mobileTab === 'preview'" class="preview">
+      <div v-if="!isMobile" class="preview">
         <IgPreview
           :kind="form.kind"
           :media="form.media"
@@ -303,11 +295,26 @@ const title = computed(() => {
           :avatar="account?.profilePic"
         />
       </div>
+      <div v-else class="m-preview">
+        <button type="button" class="m-preview-head" :aria-expanded="previewOpen" @click="previewOpen = !previewOpen">
+          <span>貼文預覽</span>
+          <el-icon :class="{ flip: previewOpen }"><ArrowDown /></el-icon>
+        </button>
+        <div v-if="previewOpen" class="preview">
+          <IgPreview
+            :kind="form.kind"
+            :media="form.media"
+            :caption="form.caption"
+            :username="account?.username"
+            :avatar="account?.profilePic"
+          />
+        </div>
+      </div>
     </div>
 
     <template #footer>
       <div class="footer">
-        <el-button v-if="post && post.status !== 'publishing'" text type="danger" @click="remove">刪除</el-button>
+        <el-button v-if="post && post.status !== 'publishing'" text type="danger" class="btn-del" @click="remove">刪除</el-button>
         <span class="spacer" />
         <template v-if="!readonly">
           <el-button :loading="saving === 'draft'" :disabled="aiBusy" @click="submit('draft')">存草稿</el-button>
@@ -316,27 +323,84 @@ const title = computed(() => {
             排程
           </el-button>
         </template>
-        <el-button v-else @click="visible = false">關閉</el-button>
+        <el-button v-else class="btn-close" @click="visible = false">關閉</el-button>
       </div>
     </template>
   </el-dialog>
 </template>
 
 <style scoped lang="scss">
+// 手機全螢幕：標題與底部操作列固定，只有中間內容區捲動（沒有巢狀捲動）
 :global(.el-dialog.composer.is-fullscreen) {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+@supports (height: 100dvh) {
+  :global(.el-dialog.composer.is-fullscreen) {
+    height: 100dvh;
+  }
+}
+:global(.el-dialog.composer.is-fullscreen .el-dialog__header) {
+  flex: none;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--lc-border);
+}
+:global(.el-dialog.composer.is-fullscreen .el-dialog__headerbtn) {
+  top: 0;
+  right: 0;
+  width: 48px;
+  height: 52px;
 }
 :global(.el-dialog.composer.is-fullscreen .el-dialog__body) {
   flex: 1;
+  min-height: 0;
+  padding: 16px 16px 24px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 :global(.el-dialog.composer.is-fullscreen .el-dialog__footer) {
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  flex: none;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--lc-border);
+  background: var(--lc-surface);
 }
-.m-tabs {
-  margin-bottom: 14px;
+// 手機輸入框字級 16px，iOS 聚焦時才不會自動放大畫面
+:global(.el-dialog.composer.is-fullscreen .el-textarea__inner),
+:global(.el-dialog.composer.is-fullscreen .el-input__inner) {
+  font-size: 16px;
+}
+.m-preview {
+  border: 1px solid var(--lc-border);
+  border-radius: 12px;
+  overflow: hidden;
+  .preview {
+    border-radius: 0;
+  }
+}
+.m-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--lc-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  .el-icon {
+    transition: transform 0.15s;
+    &.flip {
+      transform: rotate(180deg);
+    }
+  }
 }
 .layout {
   display: grid;
@@ -480,15 +544,48 @@ const title = computed(() => {
   .preview {
     position: static;
   }
-  .picker {
-    max-width: none;
+  .field :deep(.picker.el-date-editor) {
+    --el-date-editor-width: 100%;
+    --el-input-height: 44px;
   }
-  .footer .el-button + .el-button {
-    margin-left: 0;
+  .best {
+    gap: 8px;
+    .hour {
+      height: 32px;
+      padding: 0 14px;
+      font-size: 14px;
+    }
+  }
+  // 底部操作列：三顆主要動作等寬、44px 高，刪除另起一行
+  .footer {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    .spacer {
+      display: none;
+    }
+    .el-button {
+      width: 100%;
+      height: 44px;
+      margin: 0;
+    }
+    .btn-close {
+      grid-column: 1 / -1;
+    }
+    .btn-del {
+      grid-column: 1 / -1;
+      order: 5;
+      height: 36px;
+    }
   }
 }
 .acc-select {
   width: 260px;
   max-width: 100%;
+}
+@media (max-width: 768px) {
+  .acc-select {
+    width: 100%;
+  }
 }
 </style>

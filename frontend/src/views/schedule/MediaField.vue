@@ -447,4 +447,24 @@ const ratioWarning = computed(() => {
   font-size: 12px;
   margin: 8px 0 0;
 }
+// 手機：每列 3 格、縮圖隨寬度放大；移除鈕加大好點
+@media (max-width: 768px) {
+  .media-grid {
+    gap: 8px;
+  }
+  .thumb {
+    width: calc((100% - 16px) / 3);
+    height: auto;
+    aspect-ratio: 1;
+    .del {
+      top: 4px;
+      right: 4px;
+      width: 28px;
+      height: 28px;
+    }
+    &.add {
+      font-size: 13px;
+    }
+  }
+}
 </style>

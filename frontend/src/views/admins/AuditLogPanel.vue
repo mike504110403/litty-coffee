@@ -3,9 +3,11 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { auditApi, type AuditAction, type AuditAdmin, type AuditLog } from '@/api/audit'
 import { useAccountsStore } from '@/stores/accounts'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 // 操作紀錄：誰、何時、從哪、做了什麼、成功與否。篩選：管理員、動作、日期區間（多帳號時另可篩帳號）
 const accounts = useAccountsStore()
+const isMobile = useIsMobile() // 手機日期欄位不可打字，避免彈出鍵盤
 
 const filters = reactive({
   admin: null as number | null,
@@ -106,6 +108,8 @@ const showAccount = computed(() => accounts.multi)
         range-separator="～"
         start-placeholder="開始日期"
         end-placeholder="結束日期"
+        :editable="!isMobile"
+        popper-class="lc-picker-popper"
         class="f-range"
       />
       <el-button :icon="Refresh" :loading="loading" @click="load">重新整理</el-button>

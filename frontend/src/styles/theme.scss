@@ -268,3 +268,135 @@ body {
   color: var(--lc-muted);
   font-size: 14px;
 }
+
+// ---- 手機（≤768px）日期／時間選擇面板：不超出螢幕、點擊範圍放大 ----
+// 配合各選擇器的 popper-class="lc-picker-popper"；桌機不套用
+@media (max-width: 768px) {
+  // 面板改成貼在螢幕底部的抽屜式（拇指好點、一定在螢幕內）；蓋掉 popper 定位的行內樣式
+  .lc-picker-popper.el-popper {
+    position: fixed !important;
+    inset: auto 8px calc(8px + env(safe-area-inset-bottom)) 8px !important;
+    transform: none !important;
+    margin: 0 !important;
+    width: auto;
+    max-width: none;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 14px;
+    .el-popper__arrow {
+      display: none;
+    }
+  }
+  .lc-picker-popper {
+    .el-picker-panel,
+    .el-date-picker,
+    .el-date-range-picker {
+      width: 100%;
+      max-width: none;
+    }
+    .el-date-picker {
+      .el-picker-panel__content {
+        width: calc(100% - 30px); // 左右各有 15px margin
+      }
+      .el-date-picker__time-header {
+        width: 100%;
+      }
+      .el-date-picker__time-header {
+        padding: 10px 8px 8px;
+      }
+    }
+    .el-date-picker__header-label {
+      padding: 6px 8px;
+    }
+    .el-picker-panel__icon-btn {
+      width: 36px;
+      height: 36px;
+      line-height: 36px;
+    }
+    .el-date-table td {
+      height: 40px;
+      padding: 2px 0;
+      .el-date-table-cell {
+        height: 36px;
+        padding: 1px 0;
+      }
+      .el-date-table-cell__text {
+        width: 34px;
+        height: 34px;
+        line-height: 34px;
+      }
+    }
+    // 起訖日期：左右兩個月改成上下排，面板寬度跟螢幕
+    .el-date-range-picker {
+      .el-picker-panel__body {
+        min-width: 0;
+      }
+      // 兩個月上下疊，格子縮回 34px 讓整個面板放得進一個螢幕
+      .el-date-table td {
+        height: 34px;
+        .el-date-table-cell {
+          height: 32px;
+        }
+        .el-date-table-cell__text {
+          width: 30px;
+          height: 30px;
+          line-height: 30px;
+        }
+      }
+      .el-date-range-picker__header div {
+        margin-left: 76px;
+        margin-right: 76px;
+      }
+      .el-date-range-picker__content {
+        display: block; // 原本是 table-cell，寬度不會跟著撐滿
+        float: none;
+        width: 100%;
+        padding: 8px 12px;
+        &.is-left {
+          border-right: 0;
+          border-bottom: 1px solid var(--el-border-color-lighter);
+        }
+      }
+      .el-date-range-picker__time-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+      }
+    }
+    // 日期時間：時間面板改成與整個面板同寬（原本只有右半邊 180px，蓋在月曆上很難點）
+    .el-date-picker .el-date-picker__time-header,
+    .el-date-picker .el-date-picker__editor-wrap {
+      position: static;
+    }
+    .el-date-picker .el-time-panel {
+      top: 51px;
+      left: 0;
+      right: 0;
+      width: auto;
+      margin: 0;
+    }
+    // 時間捲動欄：每格 40px 好點
+    .el-time-spinner__wrapper {
+      max-height: 200px;
+    }
+    .el-time-spinner__list::before,
+    .el-time-spinner__list::after {
+      height: 80px;
+    }
+    .el-time-spinner__item {
+      height: 40px;
+      line-height: 40px;
+      font-size: 15px;
+    }
+    .el-time-panel__content::before,
+    .el-time-panel__content::after {
+      height: 40px;
+      margin-top: -20px;
+    }
+    .el-picker-panel__footer {
+      padding: 8px 12px;
+    }
+  }
+}

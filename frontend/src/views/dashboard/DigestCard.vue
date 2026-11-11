@@ -419,18 +419,81 @@ header {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+// 手機：字級與間距放大一階；展開時整張卡片往下長，不在卡片內出現小捲動區
 @media (max-width: 768px) {
   .digest {
-    padding: 8px 10px;
+    padding: 14px;
+    &.slim {
+      padding: 10px 14px;
+    }
+  }
+  header {
+    margin-bottom: 12px;
+  }
+  .title h3 {
+    font-size: 16px;
+  }
+  .date {
+    font-size: 13px;
+  }
+  .body {
+    gap: 16px;
+  }
+  .left,
+  .right {
+    gap: 12px;
+  }
+  .sum-wrap {
+    padding: 10px 12px;
+  }
+  .summary {
+    font-size: 14px;
+    line-height: 1.7;
+    &.open {
+      max-height: none;
+      overflow: visible;
+    }
+  }
+  .more {
+    padding: 6px 0;
+    font-size: 13px;
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 8px;
+  }
+  .s-label {
+    font-size: 13px;
+  }
+  .s-value {
+    font-size: 20px;
+  }
+  .s-delta {
+    font-size: 12px;
+  }
+  .todo {
+    gap: 8px;
+    &.scroll {
+      max-height: none;
+      overflow: visible;
+    }
+    li {
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      min-height: 44px;
+      padding: 10px 12px;
+    }
+  }
+  .t-who {
+    font-size: 14px;
   }
   .t-tags {
     flex-wrap: wrap;
   }
   .t-text {
-    display: none;
+    order: 3;
+    flex: 0 0 100%;
+    font-size: 13px;
   }
 }
 </style>
