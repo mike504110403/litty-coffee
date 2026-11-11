@@ -66,7 +66,7 @@ export const interactions = (p: Post) => {
 
 export const kindLabels: Record<PostKind, string> = {
   image: '貼文',
-  carousel: '輪播',
+  carousel: '貼文', // 與單張合併顯示為「貼文」
   reel: 'Reels',
   story: '限動',
 }
@@ -106,8 +106,9 @@ export const postsApi = {
       })
       .then((r) => r.data)
   },
-  caption: (account: number, brief: string, kind: PostKind) =>
+  // mediaIds：貼文圖片（依順序），後端會一併給 AI 看；brief 可空（只看圖片寫）
+  caption: (account: number, brief: string, kind: PostKind, mediaIds: number[] = []) =>
     http
-      .post<{ caption: string; hashtags: number }>('/posts/caption', { brief, kind, account }, { timeout: 90000 })
+      .post<{ caption: string; hashtags: number }>('/posts/caption', { brief, kind, account, mediaIds }, { timeout: 90000 })
       .then((r) => r.data),
 }

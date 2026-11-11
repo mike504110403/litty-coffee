@@ -15,7 +15,7 @@ func TestLiveAISwap(t *testing.T) {
 	if _, err := l.Decide(context.Background(), Settings{}, nil, nil); !errors.Is(err, ErrAIDisabled) {
 		t.Fatalf("Decide: %v", err)
 	}
-	if _, err := l.Caption(context.Background(), Settings{}, nil, "x", "image"); !errors.Is(err, ErrAIDisabled) {
+	if _, err := l.Caption(context.Background(), Settings{}, nil, "x", "image", nil); !errors.Is(err, ErrAIDisabled) {
 		t.Fatalf("Caption: %v", err)
 	}
 	l.Set("sk-ant-test", "m1", "low")

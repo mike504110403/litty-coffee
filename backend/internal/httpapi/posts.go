@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -192,12 +195,13 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 // suggestCaption 用指定帳號的人設與知識庫寫文案（body.account 必填、須在可見範圍內）。
 func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Brief   string `json:"brief"`
-		Kind    string `json:"kind"`
-		Account int64  `json:"account"`
+		Brief    string  `json:"brief"`
+		Kind     string  `json:"kind"`
+		Account  int64   `json:"account"`
+		MediaIDs []int64 `json:"mediaIds"` // 貼文的圖片：一併給 AI 看（最多 captionMaxImages 張，只取圖片）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Brief) == "" {
-		writeErr(w, http.StatusBadRequest, "請描述這篇貼文想說什麼")
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || (strings.TrimSpace(in.Brief) == "" && len(in.MediaIDs) == 0) {
+		writeErr(w, http.StatusBadRequest, "請描述這篇貼文想說什麼，或先加入圖片")
 		return
 	}
 	if !requireAccount(w, r, in.Account) {
@@ -221,13 +225,58 @@ func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "讀取知識庫失敗")
 		return
 	}
-	caption, err := s.CaptionAI.Caption(r.Context(), st, kb, in.Brief, in.Kind)
+	images, err := s.captionImages(r.Context(), in.Account, in.MediaIDs)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	caption, err := s.CaptionAI.Caption(r.Context(), st, kb, in.Brief, in.Kind, images)
 	if err != nil {
 		log.Printf("caption: %v", err)
 		writeErr(w, http.StatusBadGateway, "AI 呼叫失敗："+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"caption": caption, "hashtags": posts.CountHashtags(caption)})
+}
+
+const (
+	captionMaxImages     = 4
+	captionMaxImageBytes = 4 << 20 // Claude 單張圖片上限約 5MB（base64 前），超過的略過
+)
+
+// captionImages 讀出要給 AI 看的貼文圖片：必須屬於同一個 IG 帳號（避免拿別帳號的媒體）；影片略過。
+func (s *Server) captionImages(ctx context.Context, account int64, ids []int64) ([]automation.CaptionImage, error) {
+	if len(ids) == 0 || s.Media == nil {
+		return nil, nil
+	}
+	assets, err := s.Media.Get(ctx, ids)
+	if err != nil {
+		return nil, errors.New("讀取媒體失敗")
+	}
+	byID := make(map[int64]media.Asset, len(assets))
+	for _, a := range assets {
+		byID[a.ID] = a
+	}
+	var out []automation.CaptionImage
+	for _, id := range ids { // 依貼文順序
+		a, ok := byID[id]
+		if !ok || a.IGAccountID != account {
+			return nil, errors.New("媒體不存在或不屬於這個 IG 帳號")
+		}
+		if a.Kind != "image" || len(out) >= captionMaxImages {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.Media.Dir, filepath.Base(a.Filename)))
+		if err != nil || len(data) > captionMaxImageBytes {
+			continue
+		}
+		mt := a.ContentType
+		if mt != "image/png" && mt != "image/gif" && mt != "image/webp" {
+			mt = "image/jpeg"
+		}
+		out = append(out, automation.CaptionImage{Data: data, MediaType: mt})
+	}
+	return out, nil
 }
 
 // refreshInsights 手動更新單篇已發佈貼文的成效；成功回更新後的貼文。
