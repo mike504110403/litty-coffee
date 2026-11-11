@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
+
+	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 )
 
 // 「AI 建議回覆」：真人在收件匣回覆時，請 AI 以店員口吻擬一份草稿。草稿只回給後台放進輸入框，由真人修改後自己送出；
@@ -42,6 +44,8 @@ type SuggestOption struct {
 type Suggestion struct {
 	Options []SuggestOption `json:"options"`
 	Warning string          `json:"warning,omitempty"`
+	// StopReason 是模型的 stop reason（只記 log 用，不回前端）
+	StopReason string `json:"-"`
 }
 
 // Suggester 抽象「建議回覆」，測試時可替換成假 AI；*LiveAI 實作它。
@@ -105,6 +109,32 @@ func enabledKnowledge(kb []Knowledge) []Knowledge {
 		}
 	}
 	return out
+}
+
+// SuggestTurnText 把一則訊息轉成給模型看的文字：沒文字的媒體以標記代替，顧客已收回的與系統事件訊息略過。
+func SuggestTurnText(m inbox.Message) string {
+	if m.Deleted || m.IsSystem() {
+		return ""
+	}
+	if strings.TrimSpace(m.Text) != "" {
+		return m.Text
+	}
+	if m.Direction == "in" && m.Kind != "" && m.Kind != "text" {
+		return "（顧客傳了一則" + map[string]string{"image": "圖片", "video": "影片", "audio": "語音"}[m.Kind] + "，沒有文字）"
+	}
+	return ""
+}
+
+// SuggestTurns 把收件匣訊息（時間正序）轉成建議回覆用的對話紀錄（手動與背景產生共用）。
+func SuggestTurns(msgs []inbox.Message) []Turn {
+	turns := make([]Turn, 0, len(msgs))
+	for _, m := range msgs {
+		if m.IsSystem() {
+			continue
+		}
+		turns = append(turns, Turn{FromCustomer: m.Direction == "in", Text: SuggestTurnText(m)})
+	}
+	return turns
 }
 
 // SuggestSystemPrompt 組 system prompt：只含「這個帳號」的人設與知識庫（呼叫端傳入的就是該帳號的資料）。
@@ -238,7 +268,9 @@ func (a *AI) Suggest(ctx context.Context, st Settings, kb []Knowledge, turns []T
 	if err := json.Unmarshal([]byte(text), &o); err != nil {
 		return Suggestion{}, fmt.Errorf("解析模型輸出失敗（stop=%s）：%w", resp.StopReason, err)
 	}
-	return finishSuggestion(o, kb), nil
+	sg := finishSuggestion(o, kb)
+	sg.StopReason = string(resp.StopReason)
+	return sg, nil
 }
 
 // finishSuggestion 整理模型輸出：草稿去頭尾空白並截斷、空的與重複的版本丟掉、最多留 suggestMaxOptions 個；

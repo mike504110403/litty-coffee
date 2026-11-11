@@ -153,6 +153,14 @@ func systemPrompt(st Settings, kb []Knowledge) string {
 - 語氣保持友善有禮，不要指責、不要提到對方傳太多訊息、不要有敵意。
 `)
 	}
+	if st.WaitedMinutes > 0 {
+		fmt.Fprintf(&b, `
+## 顧客已久候
+這位顧客的訊息已經等了約 %d 分鐘都沒有店員回覆，現在改由你接手。這次 action=reply 時：
+- 回覆開頭先簡短致歉，例如「久等了，不好意思～」，再回答問題；致歉只要一句，不要解釋店員為什麼沒回。
+- 其他原則照舊；沒把握的問題照樣 handoff。
+`, st.WaitedMinutes)
+	}
 	b.WriteString(`
 ## 店家資料
 `)

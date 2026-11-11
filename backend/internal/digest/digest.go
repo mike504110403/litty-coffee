@@ -248,7 +248,8 @@ SELECT c.id, ct.username, ct.name, ct.risk, c.status, c.handler, c.last_inbound_
                AND r.resolved_at IS NULL)::int AS open_reviews
 FROM conversations c
 JOIN contacts ct ON ct.id = c.contact_id
-LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1) lm ON true
+LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id = c.id AND sender_type <> 'system'
+                   ORDER BY created_at DESC, id DESC LIMIT 1) lm ON true
 LEFT JOIN LATERAL (SELECT text FROM messages WHERE conversation_id = c.id AND direction = 'in'
                    ORDER BY created_at DESC, id DESC LIMIT 1) li ON true
 WHERE ct.ig_account_id = $1 AND c.last_inbound_at >= $4`, accountID, from, to, from.AddDate(0, 0, -lookbackDays))

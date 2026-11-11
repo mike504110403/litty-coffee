@@ -34,8 +34,11 @@ type Engine struct {
 	Ctx   context.Context
 	// Calls 記最近一次真的打出去的 AI 呼叫結果與耗時（系統狀態用）；nil＝不記
 	Calls *CallStats
+	// Suggest 背景預先產生 AI 建議回覆（對話不會由 AI 自動回覆時）；nil＝不產生
+	Suggest *SuggestWorker
 
-	locks sync.Map // convID -> *sync.Mutex
+	locks sync.Map       // convID -> *sync.Mutex
+	bg    sync.WaitGroup // OnInbound 的背景處理（測試等它結束）
 }
 
 // AIEnabled 回 AI 是否可用：沒掛 Decider，或掛的是尚未設 key 的 LiveAI 都算未啟用。
@@ -53,14 +56,18 @@ const historyTurns = 20
 
 // OnInbound 掛在 inbox.Service.OnInbound：等合併時間後，只處理該對話最新一則顧客訊息。
 // 用的是「這段對話所屬帳號」的設定、知識庫與規則。
+// 這則訊息不會由 AI 自動回覆（自動回覆關閉、真人接手中、AI／規則轉真人）時，排一次背景「AI 建議回覆」。
 func (e *Engine) OnInbound(convID int64, msg inbox.Message) {
+	e.bg.Add(1)
 	go func() {
+		defer e.bg.Done()
+		e.Suggest.Invalidate(e.Ctx, convID, msg.ID) // 新顧客訊息：舊的建議作廢
 		st, err := e.Store.GetSettings(e.Ctx, msg.IGAccountID)
 		if err != nil {
 			log.Printf("automation: settings: %v", err)
 			return
 		}
-		if !st.AutoReplyEnabled {
+		if !st.AutoReplyEnabled && e.Suggest == nil {
 			return // 自動回覆總開關關閉：只收不回，連合併等待都不必
 		}
 		select {
@@ -68,57 +75,104 @@ func (e *Engine) OnInbound(convID int64, msg inbox.Message) {
 			return
 		case <-time.After(time.Duration(st.DebounceSecs) * time.Second):
 		}
-		mu, _ := e.locks.LoadOrStore(convID, &sync.Mutex{})
-		mu.(*sync.Mutex).Lock()
-		defer mu.(*sync.Mutex).Unlock()
-		if err := e.handle(e.Ctx, convID, msg.ID, st); err != nil {
+		if !st.AutoReplyEnabled {
+			e.Suggest.Schedule(convID, msg.ID) // 只收不回：交給真人，背景先備好建議（非最新一則會自己略過）
+			return
+		}
+		mu := e.lock(convID)
+		human, err := e.process(e.Ctx, convID, msg.ID, st, handleOpts{})
+		mu.Unlock()
+		if err != nil {
 			log.Printf("automation: conv %d: %v", convID, err)
+		}
+		if human {
+			e.Suggest.Schedule(convID, msg.ID)
 		}
 	}()
 }
 
+// lock 取得並鎖住對話的處理鎖（同一對話的自動回覆、閒置交回依序處理）。
+func (e *Engine) lock(convID int64) *sync.Mutex {
+	mu, _ := e.locks.LoadOrStore(convID, &sync.Mutex{})
+	m := mu.(*sync.Mutex)
+	m.Lock()
+	return m
+}
+
+// handleOpts 是 process 的選項。
+type handleOpts struct {
+	// idle＝真人閒置交回 AI：不重算降頻、請 AI 先致歉；AI 又決定轉真人時不再送轉真人訊息（顧客已收過）
+	idle bool
+}
+
 func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) error {
+	_, err := e.process(ctx, convID, msgID, st, handleOpts{})
+	return err
+}
+
+// withoutSystem 去掉系統事件訊息（不是對話內容，不給 AI、不參與「最新一則」判斷）。
+func withoutSystem(msgs []inbox.Message) []inbox.Message {
+	out := msgs[:0:0]
+	for _, m := range msgs {
+		if !m.IsSystem() {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// process 處理一則顧客訊息；human＝這則訊息要交給真人（真人接手中、自動回覆關閉、規則／AI 轉真人），呼叫端據此排背景建議。
+func (e *Engine) process(ctx context.Context, convID, msgID int64, st Settings, opts handleOpts) (human bool, err error) {
 	if !st.AutoReplyEnabled {
-		return nil // 總開關關閉：不跑規則、AI、降頻，也不發轉真人通知
+		return true, nil // 總開關關閉：不跑規則、AI、降頻，也不發轉真人通知
 	}
 	conv, err := e.Inbox.GetConversation(ctx, convID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if conv.Contact.Risk == inbox.RiskBlocked {
-		return nil // 黑名單：訊息照收，但不跑規則與 AI、不發轉真人通知
+		return false, nil // 黑名單：訊息照收，但不跑規則與 AI、不發轉真人通知
 	}
 	if conv.Handler != "bot" {
-		return nil // 真人接手中
+		return true, nil // 真人接手中
 	}
-	// 降頻（大量訊息）：比規則還早判斷；每則顧客訊息都檢查（含稍後會因有更新訊息而略過的）
-	level, err := e.updateThrottle(ctx, conv, msgID, st)
-	if err != nil {
-		return err
+	level := conv.Contact.ThrottleLevel
+	if !opts.idle {
+		// 降頻（大量訊息）：比規則還早判斷；每則顧客訊息都檢查（含稍後會因有更新訊息而略過的）
+		if level, err = e.updateThrottle(ctx, conv, msgID, st); err != nil {
+			return false, err
+		}
 	}
 	history, err := e.Inbox.ListMessages(ctx, convID, 0, historyTurns)
-	if err != nil || len(history) == 0 {
-		return err
+	if err != nil {
+		return false, err
+	}
+	history = withoutSystem(history)
+	if len(history) == 0 {
+		return false, nil
 	}
 	last := history[len(history)-1]
 	if last.ID != msgID {
-		return nil // 有更新的訊息（或店家已回覆），交給後面那次處理
+		return false, nil // 有更新的訊息（或店家已回覆），交給後面那次處理
 	}
 	if level > 0 {
 		// 降頻中：距上次自動回覆未滿目前間隔就只收不回
 		lastReply, err := e.Inbox.LastAutoReplyAt(ctx, convID)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if lastReply != nil && time.Since(*lastReply) < ThrottleInterval(level) {
-			return nil
+			if opts.idle { // 閒置交回但降頻間隔未到：照樣只收不回，還給真人
+				return true, e.Inbox.SetHandler(ctx, convID, "human")
+			}
+			return false, nil
 		}
 		st.Throttled = true // 請 AI 回得簡短、委婉
 	}
 
 	out, err := e.Evaluate(ctx, conv.IGAccountID, st, history)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if level > 0 && out.Kind != "block" && out.Reply != "" {
 		// 降頻中回了一次 → 間隔加倍（送出失敗也升級，避免一直重試）
@@ -132,29 +186,30 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 	switch out.Kind {
 	case "block":
 		_, err := e.Inbox.AutoBlock(ctx, conv.Contact.ID, out.Detail)
-		return err
+		return false, err
 	case "rule":
 		e.Store.RecordHit(ctx, out.Rule.ID)
 		if out.Reply != "" {
 			m, err := e.Inbox.Send(ctx, convID, out.Reply, "bot")
 			if err != nil {
-				return err
+				return false, err
 			}
 			e.tagMeta(ctx, m.ID, map[string]any{"ruleId": out.Rule.ID, "ruleName": out.Rule.Name})
 		}
 		if out.Rule.Handoff {
-			return e.Inbox.Handoff(ctx, convID, "命中關鍵字規則「"+out.Rule.Name+"」")
+			return true, e.Inbox.Handoff(ctx, convID, "命中關鍵字規則「"+out.Rule.Name+"」")
 		}
 	case "ai":
 		m, err := e.Inbox.Send(ctx, convID, out.Reply, "ai")
 		if err != nil {
-			return err
+			return false, err
 		}
 		e.tagMeta(ctx, m.ID, map[string]any{"intent": out.AI.Intent, "reason": out.AI.Reason})
 	case "handoff":
-		if out.Reply != "" {
+		// 閒置交回後 AI 又轉真人：顧客先前已收過轉真人訊息，不再送一次
+		if out.Reply != "" && !opts.idle {
 			if _, err := e.Inbox.Send(ctx, convID, out.Reply, "bot"); err != nil && !errors.Is(err, inbox.ErrWindowClosed) {
-				return err
+				return false, err
 			}
 		}
 		reason := out.Detail
@@ -168,9 +223,14 @@ func (e *Engine) handle(ctx context.Context, convID, msgID int64, st Settings) e
 		if err := e.Store.AddUnsure(ctx, msgID, conv.IGAccountID, reason); err != nil {
 			log.Printf("automation: record ai_unsure: %v", err)
 		}
-		return e.Inbox.Handoff(ctx, convID, reason)
+		return true, e.Inbox.Handoff(ctx, convID, reason)
+	case "none":
+		if opts.idle {
+			// 交回後規則與 AI 都沒處理（例如圖片、AI 剛被關掉）：還給真人，不留在 bot 讓這則沒人管
+			return true, e.Inbox.SetHandler(ctx, convID, "human")
+		}
 	}
-	return nil
+	return false, nil
 }
 
 // Evaluate 決定要怎麼回：先比該帳號的關鍵字規則，沒命中再問 AI（用該帳號的知識庫）。不送出、不改資料。

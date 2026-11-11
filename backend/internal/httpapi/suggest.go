@@ -6,17 +6,20 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/inbox"
 )
 
-// POST /api/conversations/{id}/suggest：AI 替真人擬回覆草稿。
+// POST /api/conversations/{id}/suggest：AI 替真人擬回覆草稿（手動「換一組」）。
 // 只回草稿給前端放進輸入框；這裡不碰 Inbox.Send／任何 IG 送訊，也不寫 messages。
+// 成功時也寫進 conversation_suggestions（覆蓋）並推 suggestion.ready；背景預先產生見 automation/suggest_bg.go。
+// GET /api/conversations/{id}/suggestion：讀背景預先產生（或最近一次手動）的建議，不呼叫 AI、不計入限流。
 
 const (
 	suggestPerMinute = 10
@@ -82,20 +85,6 @@ func (s *Server) suggester() automation.Suggester {
 	return a
 }
 
-// suggestTurnText 把一則訊息轉成給模型看的文字：沒文字的媒體以標記代替，顧客已收回的略過。
-func suggestTurnText(m inbox.Message) string {
-	if m.Deleted {
-		return ""
-	}
-	if strings.TrimSpace(m.Text) != "" {
-		return m.Text
-	}
-	if m.Direction == "in" && m.Kind != "" && m.Kind != "text" {
-		return "（顧客傳了一則" + map[string]string{"image": "圖片", "video": "影片", "audio": "語音"}[m.Kind] + "，沒有文字）"
-	}
-	return ""
-}
-
 // suggestStatus 讓只有收件匣權限的人也能知道要不要顯示「AI 建議」按鈕。
 func (s *Server) suggestStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"configured": s.suggester() != nil})
@@ -138,10 +127,7 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 		s.inboxErr(w, err)
 		return
 	}
-	turns := make([]automation.Turn, 0, len(msgs))
-	for _, m := range msgs {
-		turns = append(turns, automation.Turn{FromCustomer: m.Direction == "in", Text: suggestTurnText(m)})
-	}
+	turns := automation.SuggestTurns(msgs)
 
 	ctx, cancel := context.WithTimeout(r.Context(), suggestTimeout)
 	defer cancel()
@@ -151,14 +137,14 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 		s.Auto.Calls.Record("suggest", start, err) // 計入總覽的 Claude 狀態（nil-safe）
 	}
 	// 只記結果與耗時，不記草稿與對話內容
-	log.Printf("suggest: conv=%d account=%d admin=%d model=%s ok=%v elapsed_ms=%d err=%v",
-		c.ID, c.IGAccountID, adminID, ai.Model(), err == nil, time.Since(start).Milliseconds(), err)
+	log.Printf("suggest: conv=%d account=%d admin=%d model=%s ok=%v options=%d stop=%s elapsed_ms=%d err_type=%T err=%v",
+		c.ID, c.IGAccountID, adminID, ai.Model(), err == nil, len(sg.Options), sg.StopReason, time.Since(start).Milliseconds(), err, err)
 	switch {
 	case errors.Is(err, automation.ErrNoCustomerTurn):
-		writeErr(w, http.StatusUnprocessableEntity, "這段對話沒有顧客訊息可參考")
+		s.suggest422(w, c, "no_customer_turn", "這段對話沒有顧客訊息可參考")
 		return
 	case errors.Is(err, automation.ErrRefused):
-		writeErr(w, http.StatusUnprocessableEntity, "AI 無法為這則訊息產生建議，請自行回覆")
+		s.suggest422(w, c, "refused", "AI 無法為這則訊息產生建議，請自行回覆")
 		return
 	case errors.Is(err, automation.ErrAIDisabled):
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
@@ -168,7 +154,7 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(sg.Options) == 0 {
-		writeErr(w, http.StatusUnprocessableEntity, "AI 沒有產生內容，請自行回覆")
+		s.suggest422(w, c, "empty", "AI 沒有產生內容，請自行回覆")
 		return
 	}
 	for i := range sg.Options {
@@ -176,5 +162,48 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 			sg.Options[i].Basis = []string{}
 		}
 	}
+	// 也存成這個對話「最新的建議」（覆蓋背景產生的），其他開著同一對話的人收到 suggestion.ready
+	if msgID, ok, err := s.lastCustomerMessage(r.Context(), c.ID); err != nil {
+		log.Printf("suggest: conv=%d save: %v", c.ID, err)
+	} else if ok {
+		if err := s.Auto.Store.SaveSuggestion(r.Context(), c.ID, msgID, sg, ai.Model()); err != nil {
+			log.Printf("suggest: conv=%d save: %v", c.ID, err)
+		} else {
+			automation.PublishSuggestionReady(s.Hub, c.ID, c.IGAccountID, msgID)
+		}
+	}
 	writeJSON(w, http.StatusOK, sg)
+}
+
+// suggest422 回 422：中文訊息照舊，另帶機器可讀的 code（no_customer_turn｜refused｜empty），並記 log。
+func (s *Server) suggest422(w http.ResponseWriter, c inbox.Conversation, code, msg string) {
+	log.Printf("suggest: conv=%d account=%d 422 code=%s", c.ID, c.IGAccountID, code)
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": msg, "code": code})
+}
+
+// lastCustomerMessage 回對話最後一則未刪除的顧客訊息（手動建議存表時的 for_message_id）。
+func (s *Server) lastCustomerMessage(ctx context.Context, convID int64) (int64, bool, error) {
+	var id int64
+	err := s.DB.QueryRow(ctx, `
+SELECT id FROM messages WHERE conversation_id = $1 AND direction = 'in' AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC LIMIT 1`, convID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
+// getSuggestion 讀這個對話目前的建議（背景預先產生或最近一次手動）：只回針對「目前需要回覆的那則顧客訊息」的，
+// 過期的一律 none。不呼叫 AI、不計入每分鐘限流；範圍外 404。
+func (s *Server) getSuggestion(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.scopedConv(w, r)
+	if !ok {
+		return
+	}
+	v, err := s.Auto.Store.CurrentSuggestion(r.Context(), s.Inbox, c.ID)
+	if err != nil {
+		s.autoErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }

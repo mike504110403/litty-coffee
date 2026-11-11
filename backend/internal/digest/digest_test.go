@@ -351,3 +351,23 @@ func TestRunDue(t *testing.T) {
 		t.Fatalf("default date: %q %v", d, err)
 	}
 }
+
+// 系統事件訊息（sender_type=system）不算回覆：最後一則是系統事件時仍是「未回覆」，也不進統計。
+func TestSystemMessageNotCountedAsReply(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	conv, _ := e.conv(t, "u1", "amy", "", "open", "bot",
+		msg{"in", "contact", "請問有開嗎", "hours", 12 * h},
+		msg{"out", "system", "真人 15 分鐘未回覆，已交回 AI", "", 11 * h})
+	d, err := e.s.Generate(ctx, e.acc, e.day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := d.Content
+	if len(c.Todo) != 1 || c.Todo[0].ConversationID != conv || !c.Todo[0].Factors.Unanswered || c.Todo[0].LastText != "請問有開嗎" {
+		t.Fatalf("todo: %+v", c.Todo)
+	}
+	if c.Totals.Inbound != 1 || c.Totals.OutboundAuto != 0 || c.Totals.OutboundHuman != 0 {
+		t.Fatalf("totals: %+v", c.Totals)
+	}
+}

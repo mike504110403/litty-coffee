@@ -85,11 +85,13 @@ type fakeAI struct {
 	persona   string      // 最近一次呼叫用的人設
 	kb        []Knowledge // 最近一次呼叫用的知識庫
 	posts     []PostRef   // 最近一次呼叫帶的近期貼文
+	waited    int         // 最近一次呼叫的 WaitedMinutes（閒置交回）
+	turns     []Turn      // 最近一次呼叫的對話紀錄
 }
 
-func (f *fakeAI) Decide(_ context.Context, st Settings, kb []Knowledge, _ []Turn) (AIDecision, error) {
+func (f *fakeAI) Decide(_ context.Context, st Settings, kb []Knowledge, turns []Turn) (AIDecision, error) {
 	f.calls++
-	f.persona, f.kb, f.throttled, f.posts = st.Persona, kb, st.Throttled, st.RecentPosts
+	f.persona, f.kb, f.throttled, f.posts, f.waited, f.turns = st.Persona, kb, st.Throttled, st.RecentPosts, st.WaitedMinutes, turns
 	return f.d, f.err
 }
 

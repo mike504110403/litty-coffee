@@ -25,7 +25,8 @@ func (s *Server) inboxRoutes(r chi.Router) {
 	r.Post("/conversations/{id}/read", s.readConversation)
 	r.Get("/conversations/{id}/messages", s.listMessages)
 	r.Post("/conversations/{id}/messages", s.sendMessage)
-	r.Post("/conversations/{id}/suggest", s.suggestReply) // AI 建議回覆：只回草稿，不送出
+	r.Post("/conversations/{id}/suggest", s.suggestReply)    // AI 建議回覆：只回草稿，不送出
+	r.Get("/conversations/{id}/suggestion", s.getSuggestion) // 背景預先產生的建議（不呼叫 AI、不計限流）
 	r.Get("/inbox/stream", s.inboxStream)
 	r.Get("/inbox/ai", s.suggestStatus) // 收件匣用的 AI 狀態（只回有沒有 key；/automation/status 需要自動回覆權限）
 	r.Get("/inbox/media/{name}", s.inboxMedia)

@@ -547,3 +547,59 @@ VALUES (1, 'story', '同步的限動', 'published', 'm2', 'ig', 'ig-x.jpg', now(
 		t.Fatal(err)
 	}
 }
+
+// 00019：背景建議表、真人閒置交回設定、系統事件訊息。既有設定／對話／訊息保留，human_idle_minutes 預設 15、只收 0/5/10/15/30/60；
+// 建議表一對話一筆、status 受限、對話刪除連帶刪；Down 只移除系統事件訊息，其他資料保留，再 Up 也能跑。
+func TestMigration19SuggestIdlePreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 18); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO ig_accounts (ig_user_id) VALUES ('acc-a')`)
+	mustExec(t, d, `DELETE FROM automation_settings`)
+	mustExec(t, d, `INSERT INTO automation_settings (ig_account_id, persona, auto_reply_enabled) VALUES (NULL, '範本', true), (1, 'A 店', false)`)
+	mustExec(t, d, `INSERT INTO contacts (ig_account_id, igsid) VALUES (1, 'u1'), (1, 'u2')`)
+	mustExec(t, d, `INSERT INTO conversations (contact_id, handler) VALUES (1, 'human'), (2, 'bot')`)
+	mustExec(t, d, `INSERT INTO messages (conversation_id, direction, sender_type, text) VALUES
+  (1, 'in', 'contact', '你好'), (1, 'out', 'human', '您好'), (2, 'in', 'contact', '在嗎')`)
+	if err := goose.UpToContext(ctx, d, "migrations", 19); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM automation_settings WHERE human_idle_minutes = 15`) != 2 ||
+		strOf(t, d, `SELECT persona || auto_reply_enabled::text FROM automation_settings WHERE ig_account_id = 1`) != "A 店false" {
+		t.Fatal("既有設定應保留、閒置交回預設 15 分")
+	}
+	if intOf(t, d, `SELECT count(*) FROM conversations WHERE idle_handback_msg_id IS NULL`) != 2 ||
+		strOf(t, d, `SELECT handler FROM conversations WHERE id = 1`) != "human" || intOf(t, d, `SELECT count(*) FROM messages`) != 3 {
+		t.Fatal("既有對話與訊息應保留")
+	}
+	if _, err := d.Exec(`UPDATE automation_settings SET human_idle_minutes = 7`); err == nil {
+		t.Fatal("human_idle_minutes 只收 0/5/10/15/30/60")
+	}
+	mustExec(t, d, `UPDATE automation_settings SET human_idle_minutes = 0 WHERE ig_account_id = 1`)
+	mustExec(t, d, `INSERT INTO conversation_suggestions (conversation_id, for_message_id, status, options) VALUES (1, 1, 'ready', '[{"label":"a","text":"b","basis":[]}]')`)
+	if _, err := d.Exec(`INSERT INTO conversation_suggestions (conversation_id, for_message_id, status) VALUES (1, 1, 'pending')`); err == nil {
+		t.Fatal("一個對話只能一筆")
+	}
+	if _, err := d.Exec(`INSERT INTO conversation_suggestions (conversation_id, for_message_id, status) VALUES (2, 3, 'stale')`); err == nil {
+		t.Fatal("status 只收 ready／pending／failed")
+	}
+	mustExec(t, d, `INSERT INTO messages (conversation_id, direction, sender_type, kind, text) VALUES (1, 'out', 'system', 'system', '真人 15 分鐘未回覆，已交回 AI')`)
+	mustExec(t, d, `UPDATE conversations SET idle_handback_msg_id = 1 WHERE id = 1`)
+	if err := goose.DownToContext(ctx, d, "migrations", 18); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM messages`) != 3 || intOf(t, d, `SELECT count(*) FROM messages WHERE sender_type = 'system'`) != 0 ||
+		intOf(t, d, `SELECT count(*) FROM conversations`) != 2 || strOf(t, d, `SELECT persona FROM automation_settings WHERE ig_account_id = 1`) != "A 店" {
+		t.Fatal("down: 只移除系統事件，其他資料保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO conversation_suggestions (conversation_id, for_message_id, status) VALUES (2, 3, 'pending')`)
+	mustExec(t, d, `DELETE FROM messages WHERE conversation_id = 2`)
+	if intOf(t, d, `SELECT count(*) FROM conversation_suggestions`) != 0 {
+		t.Fatal("訊息刪除時對應的建議一併刪")
+	}
+}

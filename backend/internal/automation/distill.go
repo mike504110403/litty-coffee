@@ -814,6 +814,7 @@ SELECT * FROM (
   JOIN conversations c ON c.id = m.conversation_id
   JOIN contacts ct ON ct.id = c.contact_id
   WHERE ct.ig_account_id = $1 AND ct.risk <> 'blocked' AND m.created_at >= $2 AND m.deleted_at IS NULL AND m.text <> ''
+    AND m.sender_type <> 'system'
   ORDER BY m.created_at DESC, m.id DESC
   LIMIT $3
 ) x ORDER BY 1, 5, 6`, accountID, since, distillMaxMessages)

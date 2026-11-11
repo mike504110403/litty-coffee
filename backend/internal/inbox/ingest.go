@@ -153,7 +153,7 @@ RETURNING id`, r.contactID).Scan(&r.convID); err != nil {
 UPDATE messages SET meta = meta || jsonb_build_object('echoMid', $4::text)
 WHERE id = (
   SELECT id FROM messages
-  WHERE conversation_id = $1 AND direction = 'out' AND text = $2 AND NOT (meta ? 'echoMid')
+  WHERE conversation_id = $1 AND direction = 'out' AND sender_type <> 'system' AND text = $2 AND NOT (meta ? 'echoMid')
     AND ig_mid IS DISTINCT FROM $4 AND created_at BETWEEN $3::timestamptz - interval '2 minutes' AND $3::timestamptz + interval '2 minutes'
   ORDER BY abs(extract(epoch FROM created_at - $3::timestamptz)) LIMIT 1
 )

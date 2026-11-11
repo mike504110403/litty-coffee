@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,11 +59,18 @@ type Settings struct {
 	DistillWeekly bool `json:"distillWeekly"`
 	// PostsKBEnabled＝AI（自動回覆、建議回覆、寫文案、蒸餾）參考這個帳號近期的 IG 貼文文案（預設開）
 	PostsKBEnabled bool `json:"postsKbEnabled"`
+	// HumanIdleMinutes：真人接手中（handler=human）最後一則未回覆的顧客訊息超過 N 分鐘就交回 AI（0＝關；只收 HumanIdleChoices）
+	HumanIdleMinutes int `json:"humanIdleMinutes"`
 	// RecentPosts 不存 DB：呼叫 AI 前由 Store.LoadRecentPosts 依 PostsKBEnabled 填入（見 postsref.go）
 	RecentPosts []PostRef `json:"-"`
 	// Throttled 不存 DB：引擎在顧客降頻中時設成 true，請 AI 回得簡短、委婉
 	Throttled bool `json:"-"`
+	// WaitedMinutes 不存 DB：真人閒置交回 AI 時設成顧客已等的分鐘數，請 AI 開頭先簡短致歉「久等了」
+	WaitedMinutes int `json:"-"`
 }
+
+// HumanIdleChoices 是「真人閒置自動交回 AI」可選的分鐘數（0＝關）。
+var HumanIdleChoices = []int{0, 5, 10, 15, 30, 60}
 
 // Store 的資料都依 IG 帳號（ig_accounts.id）區分；ig_account_id IS NULL 的是「範本」，
 // 帳號第一次用到時（EnsureAccount）從範本複製一份設定、知識庫、規則。
@@ -98,9 +106,9 @@ func (s *Store) EnsureAccount(ctx context.Context, accountID int64) error {
 	}
 	tag, err := tx.Exec(ctx, `
 INSERT INTO automation_settings (ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, ig_account_id)
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, human_idle_minutes, ig_account_id)
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, $1
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, human_idle_minutes, $1
 FROM automation_settings WHERE ig_account_id IS NULL
 ON CONFLICT (ig_account_id) DO NOTHING`, accountID)
 	if err != nil {
@@ -298,10 +306,10 @@ func (s *Store) GetSettings(ctx context.Context, accountID int64) (Settings, err
 	}
 	err := s.DB.QueryRow(ctx, `
 SELECT ai_enabled, persona, handoff_message, debounce_secs, spam_max_msgs, spam_window_secs, ai_moderation,
-  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled
+  auto_reply_enabled, digest_time, distill_weekly, posts_kb_enabled, human_idle_minutes
 FROM automation_settings WHERE ig_account_id=$1`,
 		accountID).Scan(&st.AIEnabled, &st.Persona, &st.HandoffMessage, &st.DebounceSecs, &st.SpamMaxMsgs, &st.SpamWindowSecs, &st.AIModeration,
-		&st.AutoReplyEnabled, &st.DigestTime, &st.DistillWeekly, &st.PostsKBEnabled)
+		&st.AutoReplyEnabled, &st.DigestTime, &st.DistillWeekly, &st.PostsKBEnabled, &st.HumanIdleMinutes)
 	return st, err
 }
 
@@ -322,6 +330,9 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	if !digestTimeRe.MatchString(st.DigestTime) {
 		return st, errors.New("每日摘要時間格式應為 HH:MM（00:00～23:59）")
 	}
+	if !slices.Contains(HumanIdleChoices, st.HumanIdleMinutes) {
+		return st, errors.New("真人閒置交回 AI 的分鐘數只能是 0（關）、5、10、15、30、60")
+	}
 	if err := s.EnsureAccount(ctx, accountID); err != nil {
 		return st, err
 	}
@@ -329,8 +340,8 @@ func (s *Store) SaveSettings(ctx context.Context, accountID int64, st Settings) 
 	_, err := s.DB.Exec(ctx, `
 UPDATE automation_settings SET ai_enabled=$1, persona=$2, handoff_message=$3, debounce_secs=$4,
   spam_max_msgs=$6, spam_window_secs=$7, ai_moderation=$8, auto_reply_enabled=$9, digest_time=$10, distill_weekly=$11,
-  posts_kb_enabled=$12, updated_at=now() WHERE ig_account_id=$5`,
+  posts_kb_enabled=$12, human_idle_minutes=$13, updated_at=now() WHERE ig_account_id=$5`,
 		st.AIEnabled, st.Persona, st.HandoffMessage, st.DebounceSecs, accountID, st.SpamMaxMsgs, st.SpamWindowSecs, st.AIModeration,
-		st.AutoReplyEnabled, st.DigestTime, st.DistillWeekly, st.PostsKBEnabled)
+		st.AutoReplyEnabled, st.DigestTime, st.DistillWeekly, st.PostsKBEnabled, st.HumanIdleMinutes)
 	return st, err
 }

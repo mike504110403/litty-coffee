@@ -275,3 +275,33 @@ func TestContactsAndTags(t *testing.T) {
 		t.Fatalf("tag counts all=%d a1=%d a2=%d", count(nil), count([]int64{acc1}), count([]int64{acc2}))
 	}
 }
+
+// 系統事件訊息（sender_type=system，例：真人閒置交回 AI）不算回覆、不切回合、不進任何計數。
+func TestSystemMessagesExcluded(t *testing.T) {
+	pool := setup(t)
+	loc := time.UTC
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, loc)
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 11, h, m, 0, 0, loc) }
+	seedConv(t, pool, "s", at(9, 0), []msg{
+		{"in", "contact", "hours", at(9, 0)},
+		{"out", "system", "", at(9, 1)}, // 不能被當成 1 分鐘就回覆
+		{"in", "contact", "", at(9, 2)}, // 前一則是系統事件：仍是同一回合
+		{"out", "human", "", at(9, 10)},
+	})
+	sum, err := (&Service{DB: pool, Loc: loc}).Summary(context.Background(), 1, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := sum.Current
+	if c.Totals.Inbound != 2 || c.Totals.OutboundAuto != 0 || c.Totals.OutboundHuman != 1 {
+		t.Fatalf("totals: %+v", c.Totals)
+	}
+	r := c.Response
+	if r.Turns != 1 || r.Answered != 1 || r.AvgSecs == nil || *r.AvgSecs != 600 || r.HumanAvg == nil || *r.HumanAvg != 600 || r.AutoAvg != nil {
+		t.Fatalf("response: %+v", r)
+	}
+	last := sum.Daily[len(sum.Daily)-1]
+	if last.Inbound != 2 || last.Auto != 0 || last.Human != 1 {
+		t.Fatalf("daily: %+v", last)
+	}
+}

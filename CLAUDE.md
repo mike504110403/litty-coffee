@@ -58,6 +58,8 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 依帳號：設定、知識庫、規則都有 `ig_account_id`；引擎用「對話所屬帳號」的那一份。`ig_account_id IS NULL` 的是範本，帳號第一次用到時（`automation.Store.EnsureAccount`）從範本複製一份。自動回覆頁上方選帳號，沙盒也用選的帳號；API 除 `/automation/status` 外都要帶 `?account=`
 - AI：`ANTHROPIC_API_KEY`、`AI_MODEL`（預設 claude-opus-5-5）、`AI_EFFORT`（預設 low）；開啟 server-side refusal fallback（`fallbacks: default`）
 - 意圖寫進顧客訊息的 `messages.meta.intent`，分析頁用
+- 真人閒置自動交回 AI（`automation/idle.go`，每分鐘掃）：handler=human、自動回覆與 AI 開、非黑名單、在 24h 窗口內、最後一則未回覆的顧客訊息（之後沒有真人回覆）≥ `automation_settings.human_idle_minutes`（預設 15；只收 0/5/10/15/30/60，0＝關）→ 切回 bot、寫系統事件「真人 N 分鐘未回覆，已交回 AI」、走同一條引擎（規則→AI，AI 被要求先致歉「久等了」）；AI 又轉真人不再送轉真人訊息；同一則只交回一次（`conversations.idle_handback_msg_id`）；交回後沒人處理（圖片等）還給真人。不記操作紀錄
+- 系統事件訊息：`messages.sender_type='system'`（`kind='system'`、`direction='out'`、不送 IG、不改對話最後訊息），推 `message.created`；分析、回應時間、每日摘要、蒸餾、AI 對話紀錄一律排除，新查詢要記得 `sender_type <> 'system'`
 
 ## 黑名單與標記
 
@@ -141,6 +143,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 自動回覆總開關：`automation_settings.auto_reply_enabled`（依帳號），關閉＝只收不回（不跑規則／AI／降頻／轉真人通知）
 - 每日摘要：`internal/digest`，每帳號在 `automation_settings.digest_time`（預設 09:00，`TZ_STORE`）整理前一天；重要度排序見 `digest/score.go`；AI 摘要只送統計與每則 ≤60 字節錄（輸入 ≤2400 字）；`GET /api/digests/latest`、`POST /api/digests/generate`
 - AI 建議回覆：`POST /api/conversations/{id}/suggest`（inbox 權限、依帳號範圍、每人每分鐘 10 次）；只把草稿放進輸入框、絕不自動送出；顧客訊息以 `<conversation>` 資料區塊包裝防注入；操作紀錄不記草稿；呼叫計入 Claude 狀態
+- 背景預先產生（`automation/suggest_bg.go`，migration 00019 `conversation_suggestions` 每對話一筆）：顧客訊息入庫且不會由 AI 自動回覆（handler=human、自動回覆關、規則／AI 轉真人後）→ 等合併秒數、只針對最後一則、同一則只產生一次；同時最多 3 個、每帳號每小時 60 次（行程內計數）；0 個版本重試一次；黑名單與沒 key 不產生；新顧客訊息進來舊的即刪。完成（含 failed）推 `suggestion.ready`（`{conversationId, igAccountId, forMessageId}`）。`GET /api/conversations/{id}/suggestion` 回 `status ready|pending|failed|none`（只回針對「最後一則未回覆顧客訊息」的；不呼叫 AI、不計限流）；手動 POST 成功也覆蓋存表並推事件；POST 的 422 帶 `code`：`no_customer_turn`／`refused`／`empty`
 
 ## 蒸餾建議（從對話歸納規則／知識庫）
 

@@ -135,13 +135,13 @@ FROM messages WHERE created_at >= $1 AND created_at < $2 AND `+convIn("conversat
 	}
 	p.AutoShare = t.AutoShare()
 
-	// 回應時間：顧客「開啟一個回合」（前一則不是顧客訊息）到店家第一則回覆的時間
+	// 回應時間：顧客「開啟一個回合」（前一則不是顧客訊息）到店家第一則回覆的時間；系統事件訊息（sender_type=system）不算回覆、也不切回合
 	r := &p.Response
 	err = s.DB.QueryRow(ctx, `
 WITH m AS (
   SELECT id, conversation_id, direction, created_at,
          lag(direction) OVER (PARTITION BY conversation_id ORDER BY created_at, id) AS prev_dir
-  FROM messages WHERE `+convIn("conversation_id", "$3")+`
+  FROM messages WHERE sender_type <> 'system' AND `+convIn("conversation_id", "$3")+`
 ), starts AS (
   SELECT id, conversation_id, created_at FROM m
   WHERE direction = 'in' AND (prev_dir IS NULL OR prev_dir = 'out') AND created_at >= $1 AND created_at < $2
@@ -150,7 +150,7 @@ WITH m AS (
   FROM starts s
   LEFT JOIN LATERAL (
     SELECT o.sender_type, o.created_at FROM messages o
-    WHERE o.conversation_id = s.conversation_id AND o.direction = 'out' AND (o.created_at, o.id) > (s.created_at, s.id)
+    WHERE o.conversation_id = s.conversation_id AND o.direction = 'out' AND o.sender_type <> 'system' AND (o.created_at, o.id) > (s.created_at, s.id)
     ORDER BY o.created_at, o.id LIMIT 1
   ) r ON true
 )

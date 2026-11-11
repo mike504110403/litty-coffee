@@ -107,6 +107,10 @@ func main() {
 	}
 	api.Auto = engine
 	api.AIModel = eff.AIModel
+	aiCalls := &automation.CallStats{} // 最近一次 AI 呼叫（總覽的 Claude 狀態）
+	engine.Calls = aiCalls
+	// AI 建議回覆背景預先產生（真人接手／自動回覆關閉／轉真人後）：同時最多 3 個、每帳號每小時 60 次；沒 key 時不產生
+	engine.Suggest = &automation.SuggestWorker{Store: engine.Store, Inbox: api.Inbox, AI: liveAI, Calls: aiCalls, Ctx: ctx}
 	api.Inbox.OnInbound = engine.OnInbound
 
 	loc, err := time.LoadLocation(cfg.Timezone)
@@ -152,12 +156,13 @@ func main() {
 		OnAPIError: api.Accounts.NoteAPIError, Insights: api.Posts.Insights}
 	go api.MediaSync.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
+	go engine.Suggest.Resume(ctx) // 上次中斷留下的 pending 重新排程
+	// 真人閒置自動交回 AI（每分鐘掃；依帳號 human_idle_minutes，0＝關）
+	go engine.RunIdleHandback(ctx)
 
 	// 總覽：系統狀態（每分鐘檢查、轉紅／恢復推 system.alert）與每日摘要（到時間產生前一天的摘要、推 digest.ready）。
 	// 兩者走獨立的 SysHub（/api/system/stream），不需收件匣權限也收得到
 	api.SysHub = realtime.NewHub()
-	aiCalls := &automation.CallStats{}
-	engine.Calls = aiCalls
 	var metaChecker monitor.MetaChecker = ig.NewOAuthClient("", "", "", "", cfg.IGAPIBase) // 只用帳號 token 打 GET /{ig-id}
 	if cfg.DevSimulator {
 		metaChecker = api.Accounts.OAuth.(*ig.FakeOAuth) // 模擬模式不打真 Meta

@@ -91,7 +91,7 @@ type Message struct {
 	ConversationID int64     `json:"conversationId"`
 	IGAccountID    int64     `json:"igAccountId"`
 	Direction      string    `json:"direction"`  // in | out
-	SenderType     string    `json:"senderType"` // contact | bot | ai | human
+	SenderType     string    `json:"senderType"` // contact | bot | ai | human | system（系統事件，不送 IG）
 	Kind           string    `json:"kind"`
 	Text           string    `json:"text"`
 	MediaURL       string    `json:"mediaUrl"` // 已存到自有儲存時是 /api/inbox/media/…，否則是 IG 原始網址（可能已過期）
