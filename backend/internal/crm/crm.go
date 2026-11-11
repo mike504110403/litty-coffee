@@ -33,7 +33,7 @@ type Contact struct {
 	ConversationID *int64    `json:"conversationId"`
 	Handler        string    `json:"handler"`
 	InboundCount   int       `json:"inboundCount"`
-	LastIntent     string    `json:"lastIntent"`
+	LastIntent     string    `json:"lastIntent"` // 主要意圖（閒聊／其他以外最多次的）；欄位名沿用
 	Tags           []Tag     `json:"tags"`
 	// 標記：'' 一般｜watch 問題顧客｜blocked 黑名單；解除後 risk='' 但 riskAt／riskBy 保留最後是誰解除
 	Risk       string     `json:"risk"`
@@ -64,9 +64,12 @@ const contactSelect = `
 SELECT ct.id, ct.ig_account_id, ct.igsid, ct.username, ct.name, ct.avatar_url, ct.note, ct.first_seen_at, ct.last_seen_at,
        cv.id, COALESCE(cv.handler, ''),
        (SELECT count(*) FROM messages m WHERE m.conversation_id = cv.id AND m.direction = 'in'),
+       -- 主要意圖：閒聊／其他以外出現最多次的（同次數取最近的）；只有閒聊／其他就不顯示，免得單則誤判就貼標
        COALESCE((SELECT m.meta->>'intent' FROM messages m
                  WHERE m.conversation_id = cv.id AND m.direction = 'in' AND m.meta ? 'intent'
-                 ORDER BY m.created_at DESC LIMIT 1), ''),
+                   AND m.meta->>'intent' NOT IN ('chitchat', 'other', '')
+                 GROUP BY m.meta->>'intent'
+                 ORDER BY count(*) DESC, max(m.created_at) DESC LIMIT 1), ''),
        COALESCE((SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name)
                  FROM contact_tags x JOIN tags t ON t.id = x.tag_id WHERE x.contact_id = ct.id), '[]'),
        ct.risk, ct.risk_reason, ct.risk_source, ct.risk_at, COALESCE(NULLIF(ra.display_name, ''), ra.username, ''),
