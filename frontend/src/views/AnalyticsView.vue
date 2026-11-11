@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { crmApi, type Summary } from '@/api/crm'
+import { interactions, kindLabels, postsApi, type Post } from '@/api/posts'
 import { intentLabels } from '@/api/automation'
 import ColumnChart from '@/components/charts/ColumnChart.vue'
 import BarList from '@/components/charts/BarList.vue'
@@ -31,6 +32,51 @@ async function load() {
 }
 onMounted(load)
 watch(days, load)
+
+// ---- 貼文成效：區間內已發佈、且已取得數據的貼文，依互動數排序 ----
+const posts = ref<Post[]>([])
+const postsLoading = ref(false)
+async function loadPosts() {
+  postsLoading.value = true
+  try {
+    const from = new Date(Date.now() - days.value * 86400_000)
+    posts.value = await postsApi.list({ status: 'published', from: from.toISOString() })
+  } catch {
+    posts.value = []
+  } finally {
+    postsLoading.value = false
+  }
+}
+onMounted(loadPosts)
+watch(days, loadPosts)
+
+const num = (n: number | undefined) => (n == null ? '—' : formatCount(n))
+const shortDate = (iso: string | null) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+const rankedPosts = computed(() =>
+  posts.value
+    .filter((p) => p.insightsFetchedAt)
+    .sort((a, b) => interactions(b) - interactions(a) || (b.insights.views ?? 0) - (a.insights.views ?? 0))
+    .slice(0, 10)
+    .map((p) => ({
+      id: p.id,
+      thumb: p.media[0]?.kind === 'image' ? p.media[0].url : '',
+      kind: kindLabels[p.kind],
+      caption: p.caption || (p.kind === 'story' ? '限動' : '（無文案）'),
+      date: shortDate(p.publishedAt),
+      views: num(p.insights.views),
+      reach: num(p.insights.reach),
+      likes: num(p.insights.likes),
+      comments: num(p.insights.comments ?? p.insights.replies),
+      saved: num(p.insights.saved),
+      shares: num(p.insights.shares),
+      total: formatCount(interactions(p)),
+    })),
+)
+const pendingPosts = computed(() => posts.value.filter((p) => !p.insightsFetchedAt).length)
 
 interface Tile {
   label: string
@@ -213,6 +259,38 @@ const busiest = computed(() => {
         </section>
       </div>
     </template>
+
+    <section v-loading="postsLoading" class="card lc-card posts-card">
+      <header>
+        <div>
+          <h3>貼文成效</h3>
+          <p>近 {{ days }} 天已發佈的貼文，依互動數（按讚＋留言＋收藏＋分享；限動為回覆＋分享）排序，最多 10 篇</p>
+        </div>
+      </header>
+      <el-table v-if="rankedPosts.length" :data="rankedPosts" size="small" class="post-table">
+        <el-table-column label="貼文" min-width="220">
+          <template #default="{ row }">
+            <div class="pc">
+              <img v-if="row.thumb" :src="row.thumb" alt="" />
+              <span v-else class="ph">{{ row.kind }}</span>
+              <div class="pc-text">
+                <span class="pc-cap">{{ row.caption }}</span>
+                <span class="pc-sub">{{ row.date }} · {{ row.kind }}</span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="views" label="觀看" width="80" align="right" />
+        <el-table-column prop="reach" label="觸及" width="80" align="right" />
+        <el-table-column prop="likes" label="按讚" width="76" align="right" />
+        <el-table-column prop="comments" label="留言" width="76" align="right" />
+        <el-table-column prop="saved" label="收藏" width="76" align="right" />
+        <el-table-column prop="shares" label="分享" width="76" align="right" />
+        <el-table-column prop="total" label="互動" width="84" align="right" />
+      </el-table>
+      <div v-else-if="!postsLoading" class="posts-empty">這段期間還沒有已取得成效的貼文</div>
+      <p v-if="pendingPosts" class="posts-note">另有 {{ pendingPosts }} 篇尚未取得數據（發佈後會自動更新，也可到「排程」按「更新數據」）。</p>
+    </section>
   </div>
 </template>
 
@@ -309,6 +387,57 @@ const busiest = computed(() => {
       color: var(--lc-text);
     }
   }
+}
+.posts-card {
+  margin-top: 14px;
+}
+.post-table {
+  width: 100%;
+}
+.pc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  img,
+  .ph {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .ph {
+    display: grid;
+    place-items: center;
+    background: var(--lc-cream);
+    font-size: 10px;
+  }
+}
+.pc-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pc-cap {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-sub {
+  font-size: 12px;
+  color: var(--lc-muted);
+}
+.posts-empty {
+  padding: 18px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lc-muted);
+}
+.posts-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--lc-muted);
 }
 @media (max-width: 1100px) {
   .tiles {

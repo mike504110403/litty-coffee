@@ -30,6 +30,36 @@ export interface Post {
   error: string
   publishedAt: string | null
   updatedAt: string
+  /** IG 成效快照；key 依貼文類型而異（限動沒有 likes／comments／saved，改有 replies） */
+  insights: Partial<Record<InsightKey, number>>
+  insightsFetchedAt: string | null
+  insightsError: string
+  /** 目前能不能手動更新（限動超過 24 小時就不行） */
+  insightsRefreshable: boolean
+}
+
+export type InsightKey = 'views' | 'reach' | 'likes' | 'comments' | 'saved' | 'shares' | 'replies'
+
+export const insightLabels: Record<InsightKey, string> = {
+  views: '觀看',
+  reach: '觸及',
+  likes: '按讚',
+  comments: '留言',
+  saved: '收藏',
+  shares: '分享',
+  replies: '回覆',
+}
+
+/** 各貼文類型顯示的指標與順序 */
+export const insightKeysOf = (kind: PostKind): InsightKey[] =>
+  kind === 'story'
+    ? ['views', 'reach', 'replies', 'shares']
+    : ['views', 'reach', 'likes', 'comments', 'saved', 'shares']
+
+/** 互動數＝按讚＋留言＋收藏＋分享（限動為回覆＋分享） */
+export const interactions = (p: Post) => {
+  const i = p.insights ?? {}
+  return (i.likes ?? 0) + (i.comments ?? 0) + (i.saved ?? 0) + (i.shares ?? 0) + (i.replies ?? 0)
 }
 
 export const kindLabels: Record<PostKind, string> = {
@@ -59,6 +89,8 @@ export const postsApi = {
     (post.id ? http.put<Post>(`/posts/${post.id}`, { post, action }) : http.post<Post>('/posts', { post, action })).then(
       (r) => r.data,
     ),
+  refreshInsights: (id: number) =>
+    http.post<Post>(`/posts/${id}/insights/refresh`, null, { timeout: 30000 }).then((r) => r.data),
   remove: (id: number) => http.delete(`/posts/${id}`),
   upload: (file: File, onProgress?: (pct: number) => void) => {
     const fd = new FormData()

@@ -22,6 +22,7 @@ func (s *Server) postRoutes(r chi.Router) {
 	r.Put("/posts/{id}", s.savePost)
 	r.Delete("/posts/{id}", s.deletePost)
 	r.Post("/posts/caption", s.suggestCaption)
+	r.Post("/posts/{id}/insights/refresh", s.refreshInsights)
 }
 
 func (s *Server) uploadMedia(w http.ResponseWriter, r *http.Request) {
@@ -151,4 +152,29 @@ func (s *Server) suggestCaption(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"caption": caption, "hashtags": posts.CountHashtags(caption)})
+}
+
+// refreshInsights 手動更新單篇已發佈貼文的成效；成功回更新後的貼文。
+func (s *Server) refreshInsights(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if s.Posts.Insights == nil {
+		writeErr(w, http.StatusServiceUnavailable, "成效數據未啟用")
+		return
+	}
+	p, err := s.Posts.Insights.RefreshPost(r.Context(), id)
+	switch {
+	case errors.Is(err, posts.ErrNotFound):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, posts.ErrInsightsUnavailable), errors.Is(err, posts.ErrNoToken):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		log.Printf("insights refresh %d: %v", id, err)
+		writeErr(w, http.StatusBadGateway, "向 IG 取得數據失敗："+err.Error())
+	default:
+		writeJSON(w, http.StatusOK, p)
+	}
 }

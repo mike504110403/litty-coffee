@@ -15,11 +15,12 @@ import {
   type SaveAction,
 } from '@/api/posts'
 import IgPreview from '@/components/IgPreview.vue'
+import PostInsights from './PostInsights.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 const props = defineProps<{ post: Post | null; defaultDate: Date | null; bestHours: number[] }>()
 const visible = defineModel<boolean>({ required: true })
-const emit = defineEmits<{ saved: [] }>()
+const emit = defineEmits<{ saved: []; insightsUpdated: [post: Post] }>()
 
 const isMobile = useIsMobile()
 
@@ -208,6 +209,10 @@ const title = computed(() => {
           已於 {{ new Date(post.publishedAt!).toLocaleString('zh-TW') }} 發佈
           <el-link v-if="post.permalink" :href="post.permalink" target="_blank" type="primary" :icon="Link">在 IG 查看</el-link>
         </div>
+        <section v-if="post?.status === 'published'" class="insights-box mb">
+          <h4>貼文成效</h4>
+          <PostInsights :post="post" @updated="(p) => emit('insightsUpdated', p)" />
+        </section>
 
         <div class="field">
           <label>類型</label>
@@ -365,6 +370,15 @@ const title = computed(() => {
   background: #e8f3e6;
   color: #2f5f2b;
   font-size: 14px;
+}
+.insights-box {
+  padding: 10px 14px 12px;
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  h4 {
+    margin: 0;
+    font-size: 14px;
+  }
 }
 .field {
   margin-bottom: 18px;

@@ -5,6 +5,7 @@ import { kindLabels, postsApi, statusLabels, type Post, type PostStatus } from '
 import { crmApi } from '@/api/crm'
 import { useIsMobile } from '@/composables/useIsMobile'
 import PostComposer from './PostComposer.vue'
+import PostInsights from './PostInsights.vue'
 
 const isMobile = useIsMobile()
 const view = ref<'calendar' | 'list'>(isMobile.value ? 'list' : 'calendar')
@@ -136,6 +137,11 @@ function openPost(p: Post) {
   editing.value = p
   composerOpen.value = true
 }
+// 更新數據後就地換掉清單與編輯器裡那篇，不必整頁重載
+function onInsightsUpdated(np: Post) {
+  posts.value = posts.value.map((p) => (p.id === np.id ? np : p))
+  if (editing.value?.id === np.id) editing.value = np
+}
 const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
 </script>
 
@@ -208,7 +214,15 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
     <div v-else v-loading="loading" class="agenda">
       <template v-for="g in agenda" :key="g.label">
         <div class="ag-day">{{ g.label }}</div>
-        <button v-for="p in g.items" :key="p.id" class="ag-item lc-card" @click="openPost(p)">
+        <div
+          v-for="p in g.items"
+          :key="p.id"
+          class="ag-item lc-card"
+          role="button"
+          tabindex="0"
+          @click="openPost(p)"
+          @keydown.enter.self="openPost(p)"
+        >
           <div class="ag-thumb">
             <video v-if="p.media[0]?.kind === 'video'" :src="p.media[0].url" muted />
             <img v-else-if="p.media[0]" :src="p.media[0].url" alt="" />
@@ -224,15 +238,16 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
             </div>
             <p class="ag-cap">{{ p.caption || (p.kind === 'story' ? '限動' : '（無文案）') }}</p>
             <p v-if="p.error && p.status !== 'published'" class="ag-err">{{ p.error }}</p>
+            <PostInsights v-if="p.status === 'published'" :post="p" compact @updated="onInsightsUpdated" />
           </div>
-        </button>
+        </div>
       </template>
       <el-empty v-if="!loading && !agenda.length" :image-size="100" description="還沒有排程的貼文">
         <el-button type="primary" :icon="Plus" @click="openNew()">新增第一篇</el-button>
       </el-empty>
     </div>
 
-    <PostComposer v-model="composerOpen" :post="editing" :default-date="defaultDate" :best-hours="bestHours" @saved="load" />
+    <PostComposer v-model="composerOpen" :post="editing" :default-date="defaultDate" :best-hours="bestHours" @saved="load" @insights-updated="onInsightsUpdated" />
   </div>
 </template>
 

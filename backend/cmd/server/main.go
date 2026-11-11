@@ -59,6 +59,7 @@ func main() {
 	}
 	api.Inbox = inbox.NewService(pool, messenger, hub)
 	api.Inbox.DefaultToken = cfg.IGAccessToken
+	api.Inbox.MediaDir = cfg.MediaDir
 	engine := &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: api.Inbox, Ctx: ctx}
 	if cfg.AnthropicAPIKey != "" {
 		ai := automation.NewAI(cfg.AnthropicAPIKey, cfg.AIModel, cfg.AIEffort)
@@ -100,6 +101,10 @@ func main() {
 		scheduler.Token = "dev-token"
 	}
 	go scheduler.Run(ctx)
+
+	// 已發佈貼文的成效數據：背景更新＋手動更新 API 共用同一個 refresher
+	api.Posts.Insights = &posts.InsightsRefresher{Svc: api.Posts, IG: scheduler.IG, TokenFunc: scheduler.TokenFunc, Token: scheduler.Token}
+	go api.Posts.Insights.Run(ctx)
 	go api.Inbox.RunWorker(ctx)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.Routes(), ReadHeaderTimeout: 10 * time.Second,

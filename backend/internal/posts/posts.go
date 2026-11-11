@@ -41,13 +41,21 @@ type Post struct {
 	Error         string        `json:"error"`
 	PublishedAt   *time.Time    `json:"publishedAt"`
 	UpdatedAt     time.Time     `json:"updatedAt"`
-	containerID   string
+	// 成效快照（已發佈才有）；key 依貼文類型而異，見 ig.InsightMetrics
+	Insights        map[string]int64 `json:"insights"`
+	InsightsAt      *time.Time       `json:"insightsFetchedAt"`
+	InsightsError   string           `json:"insightsError"`
+	InsightsRefresh bool             `json:"insightsRefreshable"` // 目前能不能手動更新（限動超過 24 小時就不行）
+	containerID     string
+	igMediaID       string
 }
 
 type Service struct {
 	DB    *pgxpool.Pool
 	Media *media.Store
 	wake  chan struct{}
+
+	Insights *InsightsRefresher // 成效數據更新；main 啟動時掛上，nil＝未啟用
 }
 
 func NewService(db *pgxpool.Pool, m *media.Store) *Service {
@@ -123,12 +131,13 @@ func (s *Service) Validate(ctx context.Context, p *Post, schedule bool, now time
 	return nil
 }
 
-const postCols = `id, kind, caption, media_ids, scheduled_at, status, attempts, next_attempt_at, permalink, error, published_at, updated_at, ig_container_id`
+const postCols = `id, kind, caption, media_ids, scheduled_at, status, attempts, next_attempt_at, permalink, error, published_at, updated_at, ig_container_id, insights, insights_fetched_at, insights_error, ig_media_id`
 
 func scanPost(row pgx.Row) (Post, error) {
 	var p Post
 	err := row.Scan(&p.ID, &p.Kind, &p.Caption, &p.MediaIDs, &p.ScheduledAt, &p.Status, &p.Attempts, &p.NextAttemptAt,
-		&p.Permalink, &p.Error, &p.PublishedAt, &p.UpdatedAt, &p.containerID)
+		&p.Permalink, &p.Error, &p.PublishedAt, &p.UpdatedAt, &p.containerID, &p.Insights, &p.InsightsAt, &p.InsightsError, &p.igMediaID)
+	p.InsightsRefresh = canRefreshInsights(p, time.Now())
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}

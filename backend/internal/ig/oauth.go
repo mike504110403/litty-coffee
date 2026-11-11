@@ -15,11 +15,12 @@ import (
 // Business Login for Instagram（Instagram API with Instagram Login）。
 // 流程：authorize → code 換短效 token → 換 60 天長效 token → 每次續期再 60 天（需 token 已滿 24 小時）。
 
-// Scopes 是後台需要的權限：基本資料、私訊、發文。
+// Scopes 是後台需要的權限：基本資料、私訊、發文、成效數據。
 var Scopes = []string{
 	"instagram_business_basic",
 	"instagram_business_manage_messages",
 	"instagram_business_content_publish",
+	"instagram_business_manage_insights",
 }
 
 // AccountInfo 是 /me 回傳的商家帳號資料。UserID 是 webhook entry.id 用的那個 ID。
@@ -42,7 +43,7 @@ type OAuth interface {
 	LongLived(ctx context.Context, shortToken string) (LongToken, error)
 	Refresh(ctx context.Context, token string) (LongToken, error)
 	Me(ctx context.Context, token string) (AccountInfo, error)
-	Subscribe(ctx context.Context, token string) error // 讓本 app 收到該帳號的 messages webhook
+	Subscribe(ctx context.Context, token string) error // 讓本 app 收到該帳號的私訊、已讀、表情 webhook
 }
 
 type OAuthClient struct {
@@ -169,7 +170,7 @@ func (c *OAuthClient) Me(ctx context.Context, token string) (AccountInfo, error)
 }
 
 func (c *OAuthClient) Subscribe(ctx context.Context, token string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+"/me/subscribed_apps?subscribed_fields=messages", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+"/me/subscribed_apps?subscribed_fields=messages,messaging_seen,message_reactions", nil)
 	if err != nil {
 		return err
 	}

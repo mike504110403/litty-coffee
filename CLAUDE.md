@@ -30,7 +30,11 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 
 - 測試：`TEST_DATABASE_URL=postgres://litty:litty@localhost:54330/litty_test?sslmode=disable go test -p 1 ./...`（`litty_test` 庫需先建；`-p 1` 必要：各套件共用同一個測試庫會互相 TRUNCATE；未設時整合測試跳過）
 - webhook 公開路徑：`GET/POST /webhooks/instagram`（驗 `X-Hub-Signature-256`）；串真 IG 時需公開 HTTPS
-- 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）
+- 即時推送：`GET /api/inbox/stream`（SSE，行程內 Hub；多實例時換 PG LISTEN/NOTIFY）；事件 `message.created`／`message.updated`（表情、收回）／`conversation.updated`
+- 附件：收到當下下載到 `MEDIA_DIR/inbox/`（≤25MB，以內容判型、只收圖片／影片／音訊），只經登入後的 `/api/inbox/media/{name}` 提供；下載失敗保留 IG 原網址並記 `messages.media_error`
+- 已讀（messaging_seen）→ `conversations.contact_read_at`；表情（message_reactions）只記顧客按的 → `messages.reaction`；收回（is_deleted）→ 清空內容與本地檔、留 `deleted_at`
+- 模擬器另可送「客人已讀／按表情／收回」事件
+- Meta App 後台的 webhook 欄位要勾 `messages`、`messaging_seen`、`message_reactions`（連結時程式也會用 subscribed_apps 訂閱這三個）
 
 ## 自動回覆
 
@@ -53,6 +57,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 中斷復原：publishing 超過 10 分鐘視為中斷；有 `ig_container_id` 時先查容器狀態，PUBLISHED 即直接標已發佈，不重發
 - 發佈 token：設定頁連結帳號的 token（`account.Service.Token`），沒連結才用 `IG_ACCESS_TOKEN` 兜底（DEV_SIMULATOR=1 時走 `ig.FakePublisher`）
 - AI 寫文案：`POST /api/posts/caption`，沿用自動回覆的人設與知識庫
+- 成效（Insights）：`posts.InsightsRefresher` 每 15 分掃一次，只更新近 30 天已發佈的；未滿 7 天每 6 小時、之後每天；限動只在 24 小時內。指標：貼文／輪播／Reels＝views, reach, likes, comments, saved, shares；限動＝views, reach, replies, shares（`impressions` 已棄用）。手動 `POST /api/posts/{id}/insights/refresh`。需 `instagram_business_manage_insights` 權限（加權限後既有帳號要重新連結）
 
 ## 設定頁／IG 帳號連結
 
@@ -68,13 +73,12 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 
 - AI 真實呼叫尚未實測（目前無 API key）；沙盒可直接驗
 - IG 真實發佈（Content Publishing API）尚未實測：端點與參數依官方文件寫成，串上真帳號時需驗；尚未查 `content_publishing_limit`（24h 上限）
-- 已發佈貼文的成效（Insights API）未接
-- 收到的媒體 URL 會過期：目前只存 URL，需改為即時下載到自有儲存
-- 已讀、reaction、訊息收回等 webhook 事件尚未處理（worker 直接略過）
+- 成效 API 未接真帳號實測；文件寫輪播（album）可能無成效數據，目前照一般貼文請求，失敗會記在 `insights_error`
+- 附件下載失敗不重試（IG 網址過期後也抓不到）
 - IG OAuth 真實流程尚未實測（需 Meta App＋HTTPS 網址）；token 以明文存 DB，畢業總審時評估加密
 
 ## IG API 限制（設計時以此為準）
 
 - 只能在用戶最後一則訊息後 24h 內回覆（`HUMAN_AGENT` tag 可延到 7 天，限真人）
 - 不能主動私訊陌生人、不能群發；DM 排程只能落在窗口內
-- 收到的媒體 URL 會過期，要即時下載
+- 收到的媒體 URL 會過期，要即時下載（已做，見開發模擬器段）
