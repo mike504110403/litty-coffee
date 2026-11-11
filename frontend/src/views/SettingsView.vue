@@ -76,7 +76,7 @@ const insecurePublic = computed(() => !!integ.value && !integ.value.publicBaseUr
 </script>
 
 <template>
-  <div class="settings">
+  <div class="settings lc-m">
     <h1 class="lc-page-title lc-page-title--solo">設定</h1>
 
     <el-empty v-if="!sections.length" description="沒有可設定的項目" />
@@ -301,6 +301,13 @@ const insecurePublic = computed(() => !!integ.value && !integ.value.publicBaseUr
   .facts > div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .facts code {
+    font-size: 13px;
   }
 }
 </style>

@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, Flag } from '@element-plus/icons-vue'
 import { flagsApi, type RiskResult } from '@/api/flags'
 import { riskLabels, type Risk } from '@/api/inbox'
+
+const isMobile = useIsMobile()
 
 // 「標記」下拉：加入黑名單／標記問題顧客／解除，選了跳出原因輸入框再送出。收件匣與顧客頁共用。
 const props = defineProps<{ contactId: number; risk: Risk; size?: 'small' | 'default' }>()
@@ -59,7 +62,7 @@ async function submit() {
     </template>
   </el-dropdown>
 
-  <el-dialog v-model="open" :title="target !== null ? titles[target] : ''" width="min(420px, 92vw)" append-to-body align-center>
+  <el-dialog class="lc-fs-dialog" :fullscreen="isMobile" v-model="open" :title="target !== null ? titles[target] : ''" width="min(420px, 92vw)" append-to-body align-center>
     <p class="hint">{{ target !== null ? hints[target] : '' }}</p>
     <el-input
       v-model="reason"

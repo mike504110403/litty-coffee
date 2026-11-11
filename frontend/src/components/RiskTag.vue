@@ -40,4 +40,10 @@ const title = computed(() => {
   color: var(--lc-warn-fg);
   box-shadow: inset 0 0 0 1px var(--lc-warn-line);
 }
+@media (max-width: 768px) {
+  .risk-tag {
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
 </style>

@@ -62,7 +62,7 @@ function onUpdated(c: CrmContact) {
 </script>
 
 <template>
-  <div>
+  <div class="lc-m">
     <div class="head">
       <div>
         <h1 class="lc-page-title lc-page-title--solo">顧客</h1>
@@ -306,6 +306,67 @@ function onUpdated(c: CrmContact) {
   }
   .row {
     padding: 12px 16px;
+    min-height: 64px;
+  }
+  .filters {
+    gap: 8px;
+    .search {
+      flex: 1 1 100%; // 搜尋獨佔一列，排序／帳號在下一列
+    }
+    .sort {
+      flex: 1 1 0;
+      width: auto;
+    }
+    .acc-filter {
+      flex: 1 1 0;
+      width: auto;
+    }
+  }
+  // 篩選標籤：一列可橫滑（不換行佔掉一屏），點擊範圍 ≥40px
+  .tag-filter {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -16px 12px;
+    padding: 0 16px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+  .chip {
+    flex-shrink: 0;
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+    white-space: nowrap;
+    span {
+      font-size: 13px;
+    }
+  }
+  .sep {
+    flex-shrink: 0;
+  }
+  .line1 {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    .name {
+      flex-shrink: 0;
+      max-width: 100%;
+    }
+  }
+  .line1 .handle,
+  .meta,
+  .note {
+    font-size: 13px;
+  }
+  .tag {
+    font-size: 13px;
+    padding: 1px 9px;
+  }
+  .meta {
+    max-width: 38%;
   }
 }
 </style>

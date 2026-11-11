@@ -372,4 +372,12 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
     justify-content: flex-end;
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .conn-sub,
+  .err {
+    font-size: 13px;
+  }
+}
 </style>

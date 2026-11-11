@@ -343,4 +343,11 @@ async function testAi() {
     flex-wrap: wrap;
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .small {
+    font-size: 13px;
+  }
+}
 </style>

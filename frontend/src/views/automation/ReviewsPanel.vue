@@ -256,4 +256,16 @@ footer {
     margin-left: 0;
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .kind,
+  .intent,
+  .time,
+  .lbl,
+  .by,
+  .done {
+    font-size: 13px;
+  }
+}
 </style>

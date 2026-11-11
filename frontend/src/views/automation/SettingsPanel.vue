@@ -86,9 +86,9 @@ async function save() {
           <HelpTip text="超過門檻後降低回覆頻率（不會封鎖）：自動標成問題顧客，之後每 5、10、20…分鐘最多自動回一次，AI 會回得簡短並請對方稍候店員；顧客安靜一段時間後恢復。填 0＝關閉。" />
         </template>
         <div class="spam-row">
-          <el-input-number v-model="spamMinutes" :min="1" :max="1440" :step="1" controls-position="right" class="num" />
+          <el-input-number v-model="spamMinutes" :min="1" :max="1440" :step="1" :controls-position="isMobile ? undefined : 'right'" class="num" />
           <span>分鐘內超過</span>
-          <el-input-number v-model="form.spamMaxMsgs" :min="0" :max="500" :step="1" controls-position="right" class="num" />
+          <el-input-number v-model="form.spamMaxMsgs" :min="0" :max="500" :step="1" :controls-position="isMobile ? undefined : 'right'" class="num" />
           <span>則</span>
         </div>
       </el-form-item>
@@ -186,6 +186,19 @@ async function save() {
 @media (max-width: 768px) {
   .wrap {
     padding: 16px;
+  }
+  .spam-row .num {
+    width: 150px; // 手機的數字框兩側有 ± 鈕（各 40px）
+  }
+  .help {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .help {
+    font-size: 13px;
   }
 }
 </style>

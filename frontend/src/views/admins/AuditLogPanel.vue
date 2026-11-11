@@ -77,6 +77,12 @@ const resultLabel = (l: AuditLog) => (l.success ? '成功' : l.status ? `失敗�
 const accountName = (id: number | null) => (id == null ? '' : accounts.label(id))
 const detailText = (l: AuditLog) => JSON.stringify(l.detail, null, 2)
 const showAccount = computed(() => accounts.multi)
+const opened = ref(new Set<number>())
+function toggleOpen(id: number) {
+  const s = new Set(opened.value)
+  if (!s.delete(id)) s.add(id)
+  opened.value = s
+}
 </script>
 
 <template>
@@ -115,7 +121,41 @@ const showAccount = computed(() => accounts.multi)
       <el-button :icon="Refresh" :loading="loading" @click="load">重新整理</el-button>
     </div>
 
-    <el-table v-loading="loading" :data="items" row-key="id" class="table" empty-text="沒有符合的紀錄">
+    <!-- 手機：卡片列表（點一下展開詳細）；桌機：表格 -->
+    <div v-if="isMobile" v-loading="loading" class="cards">
+      <article v-for="row in items" :key="row.id" class="card" :class="{ open: opened.has(row.id) }">
+        <button type="button" class="card-head" :aria-expanded="opened.has(row.id)" @click="toggleOpen(row.id)">
+          <div class="c-line1">
+            <span class="c-time">{{ fullTime(row.createdAt) }}</span>
+            <el-tag :type="row.success ? 'success' : 'danger'" size="small" disable-transitions>
+              {{ resultLabel(asLog(row)) }}
+            </el-tag>
+          </div>
+          <div class="c-line2">
+            <span class="c-action">{{ row.actionName }}</span>
+            <span class="c-admin">{{ row.adminName || '—' }}</span>
+          </div>
+          <div class="c-line3">
+            <span>{{ row.targetLabel || '—' }}</span>
+            <span v-if="showAccount && row.igAccountId != null" class="acc">{{ accountName(row.igAccountId) }}</span>
+            <span class="mono c-ip">{{ row.ip || '—' }}</span>
+          </div>
+        </button>
+        <div v-if="opened.has(row.id)" class="detail">
+          <dl>
+            <dt>說明</dt>
+            <dd>{{ row.summary }}</dd>
+            <dt>動作鍵</dt>
+            <dd class="mono">{{ row.action }}</dd>
+            <dt>裝置</dt>
+            <dd class="ua">{{ row.userAgent || '—' }}</dd>
+          </dl>
+          <pre class="json">{{ detailText(asLog(row)) }}</pre>
+        </div>
+      </article>
+      <el-empty v-if="!loading && !items.length" :image-size="80" description="沒有符合的紀錄" />
+    </div>
+    <el-table v-else v-loading="loading" :data="items" row-key="id" class="table" empty-text="沒有符合的紀錄">
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="detail">
@@ -167,15 +207,16 @@ const showAccount = computed(() => accounts.multi)
       v-model:page-size="pageSize"
       :total="total"
       :page-sizes="[20, 50, 100, 200]"
-      layout="total, sizes, prev, pager, next"
+:layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
+      :pager-count="isMobile ? 5 : 7"
+      :small="!isMobile"
       class="pager"
-      size="small"
       background
     />
   </div>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .audit {
   display: flex;
   flex-direction: column;
@@ -248,6 +289,91 @@ const showAccount = computed(() => accounts.multi)
   justify-content: flex-end;
   flex-wrap: wrap;
 }
+.cards {
+  display: flex;
+  flex-direction: column;
+  min-height: 80px;
+}
+.card {
+  border-top: 1px solid var(--lc-border);
+  &:first-child {
+    border-top: 0;
+  }
+}
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-height: 40px;
+  padding: 10px 2px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.c-line1,
+.c-line2,
+.c-line3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.c-time {
+  font-size: 13px;
+  color: var(--lc-muted);
+}
+.c-action {
+  font-weight: 600;
+  font-size: 15px;
+}
+.c-admin {
+  font-size: 13px;
+  color: var(--lc-muted);
+}
+.c-line3 {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--lc-text);
+  .c-ip {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--lc-muted);
+  }
+}
+.card .detail {
+  padding: 0 2px 12px;
+}
+.card .json {
+  max-height: none;
+  overflow: visible;
+  font-size: 13px;
+}
+.card .detail dl,
+.card .ua {
+  font-size: 13px;
+}
+@media (max-width: 768px) {
+  .pager {
+    justify-content: center;
+    :deep(.btn-prev),
+    :deep(.btn-next),
+    :deep(.el-pager li) {
+      min-width: 40px;
+      height: 40px;
+      line-height: 40px;
+      font-size: 14px;
+    }
+  }
+  .mono {
+    font-size: 13px;
+  }
+}
 @media (max-width: 640px) {
   .f-admin,
   .f-action,
@@ -258,6 +384,16 @@ const showAccount = computed(() => accounts.multi)
   }
   .detail {
     padding-left: 8px;
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .json,
+  .mono,
+  .ua,
+  .acc {
+    font-size: 13px;
   }
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -6,6 +7,8 @@ import { adminsApi, permMeta } from '@/api/admins'
 import { useAuthStore, type AdminUser, type Perm } from '@/stores/auth'
 import HelpTip from '@/components/HelpTip.vue'
 import { shortTime } from '@/utils/time'
+
+const isMobile = useIsMobile()
 
 const auth = useAuthStore()
 const me = computed(() => auth.user)
@@ -253,7 +256,7 @@ async function toggleDisabled(u: AdminUser) {
       </li>
     </ul>
 
-    <el-dialog v-model="dialog" :title="editing ? '編輯管理員' : '新增管理員'" width="min(520px, 92vw)" append-to-body>
+    <el-dialog class="lc-fs-dialog" :fullscreen="isMobile" v-model="dialog" :title="editing ? '編輯管理員' : '新增管理員'" width="min(520px, 92vw)" append-to-body>
       <el-form ref="formRef" :model="form" :rules="editing ? {} : rules" label-position="top" @submit.prevent="save">
         <el-form-item label="登入帳號" prop="username">
           <el-input v-model="form.username" :disabled="!!editing" autocomplete="off" placeholder="例如 mei" />
@@ -464,6 +467,14 @@ async function toggleDisabled(u: AdminUser) {
   }
   .perm-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .small,
+  .account {
+    font-size: 13px;
   }
 }
 </style>

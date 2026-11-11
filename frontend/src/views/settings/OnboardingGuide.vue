@@ -308,4 +308,15 @@ const reviewStart = phases.reduce((n, p) => n + p.steps.length, 0)
     }
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .who,
+  .where,
+  .num,
+  .s-text :deep(code),
+  .note {
+    font-size: 13px;
+  }
+}
 </style>

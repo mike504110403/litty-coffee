@@ -400,3 +400,120 @@ body {
     }
   }
 }
+
+// ---- 手機（≤768px）後台頁面共用：輸入框 16px、可點目標 ≥40px、編輯類對話框全螢幕 ----
+// .lc-m 掛在頁面根元素（收件匣、顧客、自動回覆、設定、管理員）；對話框走 teleport，改用 .lc-fs-dialog（需同時 :fullscreen="isMobile"）。桌機不套用
+@media (max-width: 768px) {
+  .lc-m,
+  .lc-fs-dialog,
+  .lc-m-drawer {
+    .el-input__inner,
+    .el-textarea__inner,
+    .el-select__input,
+    .el-select__selected-item,
+    .el-range-input,
+    .el-input-number .el-input__inner {
+      font-size: 16px; // iOS 聚焦時 <16px 會自動放大頁面
+    }
+    .el-input__wrapper,
+    .el-select__wrapper {
+      min-height: 40px;
+    }
+    .el-button {
+      min-height: 40px;
+      font-size: 14px;
+    }
+    .el-switch {
+      height: 40px;
+    }
+    .el-checkbox,
+    .el-radio {
+      min-height: 40px;
+    }
+    .el-segmented__item {
+      min-height: 40px;
+    }
+    .el-radio-button__inner {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+    .el-check-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+    }
+    .el-button.is-circle {
+      width: 40px;
+      height: 40px;
+    }
+    .el-textarea__inner {
+      resize: none;
+    }
+    .el-form-item__label {
+      font-size: 14px;
+    }
+    .el-tag {
+      font-size: 13px;
+      height: 28px;
+    }
+  }
+
+  .el-dialog.lc-fs-dialog.is-fullscreen {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 0;
+    .el-dialog__header {
+      flex: none;
+      display: flex;
+      align-items: center;
+      min-height: 56px;
+      margin: 0;
+      padding: env(safe-area-inset-top) 56px 0 16px;
+      border-bottom: 1px solid var(--lc-border);
+      background: var(--lc-surface);
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .el-dialog__title {
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .el-dialog__headerbtn {
+      top: env(safe-area-inset-top);
+      right: 0;
+      width: 56px;
+      height: 56px;
+    }
+    .el-dialog__body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 16px;
+    }
+    .el-dialog__footer {
+      flex: none;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--lc-border);
+      background: var(--lc-surface);
+      .el-button {
+        flex: 1;
+        margin: 0;
+        min-height: 44px;
+      }
+    }
+  }
+}

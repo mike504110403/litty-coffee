@@ -40,6 +40,14 @@ const trigger = computed(() => (canHover.value ? 'hover' : 'click'))
   vertical-align: middle;
   cursor: help;
   flex: none;
+  position: relative;
+  @media (max-width: 768px) {
+    &::after {
+      content: '';
+      position: absolute;
+      inset: -10px; // 手機點擊範圍放大到 40px，不影響版面
+    }
+  }
   &:hover,
   &:focus-visible {
     color: var(--el-color-primary);

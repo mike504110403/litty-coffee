@@ -143,6 +143,7 @@ function useExample(e: (typeof examples)[number]) {
     </div>
 
     <el-dialog
+      class="lc-fs-dialog"
       v-model="dialog"
       :title="form.id ? '編輯規則' : '新增規則'"
       :fullscreen="isMobile"
@@ -196,7 +197,7 @@ function useExample(e: (typeof examples)[number]) {
           <el-checkbox v-model="form.handoff">命中後轉真人處理（AI 暫停）</el-checkbox>
           <div class="prio-field">
             <span>優先順序<HelpTip text="數字小的先比對。" /></span>
-            <el-input-number v-model="form.priority" :min="0" :max="9999" size="small" controls-position="right" />
+            <el-input-number v-model="form.priority" :min="0" :max="9999" :size="isMobile ? 'default' : 'small'" :controls-position="isMobile ? undefined : 'right'" />
           </div>
         </div>
       </el-form>
@@ -361,6 +362,16 @@ function useExample(e: (typeof examples)[number]) {
 @media (max-width: 768px) {
   .grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .r-head .prio,
+  .kws .mt,
+  .r-foot,
+  .example span {
+    font-size: 13px;
   }
 }
 </style>

@@ -90,7 +90,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div>
+  <div class="lc-m">
     <div class="head">
       <div>
         <h1 class="lc-page-title lc-page-title--solo">自動回覆</h1>
@@ -217,9 +217,9 @@ onMounted(async () => {
   .tabs {
     width: 100%;
     :deep(.pill) {
-      flex: 1;
-      padding: 8px 4px;
-      font-size: 13px;
+      flex: 1 0 auto;
+      padding: 0 10px;
+      font-size: 14px;
     }
   }
   .tool-right {

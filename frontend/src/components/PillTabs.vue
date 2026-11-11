@@ -57,4 +57,18 @@ const model = defineModel<K>({ required: true })
     box-shadow: var(--lc-tab-shadow);
   }
 }
+@media (max-width: 768px) {
+  // 手機：一列可橫滑、不換行；點擊範圍 ≥40px
+  .pill-tabs {
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+  .pill {
+    min-height: 40px;
+    padding: 0 18px;
+    scroll-snap-align: center;
+  }
+}
 </style>

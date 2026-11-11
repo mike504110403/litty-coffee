@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Promotion, Check, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type InputInstance } from 'element-plus'
+import { ArrowLeft, Promotion, Check, RefreshLeft, WarningFilled, Clock } from '@element-plus/icons-vue'
 import { contactLabel, inboxApi, riskSourceLabels, throttleMinutes, type Conversation, type Message, type Suggestion, type SuggestOption } from '@/api/inbox'
 import { flagsApi, type RiskResult } from '@/api/flags'
 import ContactAvatar from '@/components/ContactAvatar.vue'
@@ -10,7 +11,10 @@ import RiskTag from '@/components/RiskTag.vue'
 import RiskMenu from '@/components/RiskMenu.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { useAccountsStore } from '@/stores/accounts'
+import type { PendingMessage } from '@/stores/inbox'
 import { clockTime, dayKey, dayLabel } from '@/utils/time'
+
+const isMobile = useIsMobile()
 
 const accountsStore = useAccountsStore()
 
@@ -18,7 +22,8 @@ const props = defineProps<{
   conversation: Conversation
   messages: Message[] | undefined
   hasMore: boolean
-  sendFn: (text: string) => Promise<void>
+  pending?: PendingMessage[] // 樂觀送出中的暫時訊息（傳送中／等待中／失敗）
+  sendFn: (text: string) => void
 }>()
 const emit = defineEmits<{
   back: []
@@ -27,11 +32,14 @@ const emit = defineEmits<{
   'set-status': [s: 'open' | 'closed']
   'open-contact': []
   'risk-changed': [r: RiskResult]
+  retry: [tmpId: number]
+  discard: [tmpId: number]
 }>()
 
 const scroller = ref<HTMLElement>()
+const inputRef = ref<InputInstance>()
+const composerEl = ref<HTMLElement>()
 const draft = ref('')
-const sending = ref(false)
 
 // --- 24h / 7d 回覆窗口 ---
 const now = ref(Date.now())
@@ -82,37 +90,104 @@ const groups = computed(() => {
 
 const senderLabel: Record<string, string> = { ai: 'AI', bot: '自動回覆', human: '真人' }
 
-// --- 捲動：新訊息時若在底部附近就自動捲到底 ---
+// --- 捲動：訊息區是唯一的捲動區 ---
+// stick＝使用者人在底部附近：內容長高（圖片載入、鍵盤彈出、建議卡出現）時維持貼底
+const inner = ref<HTMLElement>()
+const stick = ref(true)
+const unseen = ref(0) // 人不在底部時收到的新訊息數 → 顯示「↓ 新訊息」浮鈕
+const NEAR = 120
 function nearBottom() {
   const el = scroller.value
-  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < NEAR
+}
+function toBottomNow() {
+  const el = scroller.value
+  if (el) el.scrollTop = el.scrollHeight
+  stick.value = true
+  unseen.value = 0
 }
 async function toBottom() {
   await nextTick()
-  scroller.value?.scrollTo({ top: scroller.value.scrollHeight })
+  toBottomNow()
 }
+function jumpNew() {
+  const el = scroller.value
+  el?.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  unseen.value = 0
+  stick.value = true
+}
+let ro: ResizeObserver | undefined
+onMounted(() => {
+  toBottomNow()
+  if (typeof ResizeObserver === 'undefined') return
+  ro = new ResizeObserver(() => {
+    if (stick.value) toBottomNow()
+  })
+  if (inner.value) ro.observe(inner.value)
+  if (scroller.value) ro.observe(scroller.value)
+})
+onBeforeUnmount(() => ro?.disconnect())
+
+// 換對話：直接停在最底（不經過上一段對話的位置）
 watch(
   () => props.conversation.id,
-  () => toBottom(),
-)
-watch(
-  () => props.messages?.length ?? 0,
-  async (_n, o) => {
-    if (!o || nearBottom()) await toBottom()
+  () => {
+    loadingOlder = false
+    toBottom()
   },
+  { flush: 'post' },
 )
-onMounted(toBottom)
+// 訊息變動：尾端新增＝新訊息（貼底才跟著捲，否則出浮鈕）；開頭新增＝載入更早（維持畫面位置）
+watch(
+  () => [props.messages?.[0]?.id, props.messages?.[props.messages.length - 1]?.id, props.messages?.length ?? 0] as const,
+  ([first, last, len], [pFirst, pLast, pLen]) => {
+    if (!pLen) {
+      toBottom() // 第一次載入
+      return
+    }
+    if (last !== pLast && len > pLen && first === pFirst) {
+      // 尾端新增（自己送出的已在 submit 捲到底）
+      if (stick.value) toBottom()
+      else unseen.value += 1
+    }
+  },
+  { flush: 'post' },
+)
 
-async function onScroll() {
+// 暫時訊息出現／狀態改變（失敗的那行比較高）：人在底部就維持貼底，由 ResizeObserver 負責
+// 載入更早：先在 DOM 更新前記下高度，更新後補回差值，畫面不跳
+let loadingOlder = false
+let olderTimer: ReturnType<typeof setTimeout> | undefined
+let anchorHeight = 0
+let anchorTop = 0
+watch(
+  () => props.messages?.[0]?.id,
+  (first, pFirst) => {
+    if (pFirst === undefined || first === pFirst || !loadingOlder) return
+    // flush:'pre'：此時 DOM 還是舊的
+    anchorHeight = scroller.value?.scrollHeight ?? 0
+    anchorTop = scroller.value?.scrollTop ?? 0
+    nextTick(() => {
+      const el = scroller.value
+      if (el) el.scrollTop = anchorTop + (el.scrollHeight - anchorHeight)
+      loadingOlder = false
+      clearTimeout(olderTimer)
+    })
+  },
+  { flush: 'pre' },
+)
+onBeforeUnmount(() => clearTimeout(olderTimer))
+
+function onScroll() {
   const el = scroller.value
-  if (!el || el.scrollTop > 40 || !props.hasMore) return
-  const prev = el.scrollHeight
+  if (!el) return
+  stick.value = nearBottom()
+  if (stick.value) unseen.value = 0
+  if (el.scrollTop > 40 || !props.hasMore || loadingOlder || !props.messages) return
+  loadingOlder = true
+  clearTimeout(olderTimer)
+  olderTimer = setTimeout(() => (loadingOlder = false), 5000) // 請求失敗時放行重試
   emit('load-older')
-  await nextTick()
-  // 等父層載完再補位；簡化：下一幀維持視覺位置
-  requestAnimationFrame(() => {
-    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight - prev
-  })
 }
 
 // --- 送出（Enter 送出、Shift+Enter 換行；中文輸入法選字中不送） ---
@@ -123,21 +198,16 @@ function onKeydown(ev: Event | KeyboardEvent) {
   e.preventDefault()
   submit()
 }
-async function submit() {
+// 樂觀送出：立刻清空輸入框、訊息進對話底部（狀態「傳送中」），背景由 store 依序送；輸入框不鎖，可接著打下一則
+function submit() {
   const text = draft.value.trim()
-  if (!text || sending.value || !canSend.value) return
-  sending.value = true
-  try {
-    await props.sendFn(text)
-    draft.value = ''
-    picked.value = null
-    suggestion.value = null // 已回覆，候選作廢
-    await toBottom()
-  } catch {
-    // 錯誤由 http 攔截器提示；保留草稿讓使用者重送
-  } finally {
-    sending.value = false
-  }
+  if (!text || !canSend.value) return
+  props.sendFn(text)
+  draft.value = ''
+  dismissSuggestion() // 已回覆，候選作廢（含「AI 草稿」標籤與選中的候選卡）
+  picked.value = null
+  stick.value = true
+  void toBottom()
 }
 
 // --- AI 建議回覆：一次給數個版本，點一個放進輸入框，送出一律由人按 ---
@@ -219,15 +289,33 @@ function dismissSuggestion() {
   suggestion.value = null
 }
 
-// 開啟自動建議時：「真人」處理、最後一則是顧客的對話 → 自動要一組候選（只顯示，不放進輸入框、不送出）
+// 最近一則真人回覆之後、仍有未刪除的顧客訊息 → 回傳最後一則顧客訊息的 id（否則 null）。
+// 轉真人時 AI／規則會先回一句「請店員回覆」，所以不能只看最後一則是不是顧客的
+const pendingInboundId = computed(() => {
+  const list = props.messages
+  if (!list) return null
+  let inboundIdx = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].direction === 'in' && !list[i].deleted) {
+      inboundIdx = i
+      break
+    }
+  }
+  if (inboundIdx < 0) return null
+  for (let i = list.length - 1; i > inboundIdx; i--) {
+    const m = list[i]
+    if (m.direction === 'out' && !m.deleted && m.senderType !== 'ai' && m.senderType !== 'bot') return null
+  }
+  return list[inboundIdx].id
+})
+
+// 開啟自動建議時：「真人」處理、真人回覆之後還有顧客訊息的對話 → 自動要一組候選（只顯示，不放進輸入框、不送出）
 function maybeAutoSuggest() {
   const c = props.conversation
   if (!autoSuggest.value || !aiConfigured.value || suggesting.value || suggestion.value) return
-  if (c.handler !== 'human' || !canSend.value || !props.messages) return
-  const last = props.messages[props.messages.length - 1]
-  if (!last || last.direction !== 'in' || last.deleted) return
-  const key = last.id
-  if (autoTried.has(key)) return
+  if (c.handler !== 'human' || !canSend.value) return
+  const key = pendingInboundId.value
+  if (key == null || autoTried.has(key)) return
   autoTried.add(key)
   void runSuggest(true)
 }
@@ -241,17 +329,12 @@ watch(
     suggestion.value = null
   },
 )
-// 顧客又傳新訊息 → 舊候選過時，收起來讓自動建議重新要
+// 顧客又傳新訊息（最後一則顧客訊息 id 改變）→ 舊候選過時，收起來讓自動建議重新要
+watch(pendingInboundId, (id, prev) => {
+  if (prev != null && id !== prev) suggestion.value = null
+})
 watch(
-  () => props.messages?.[props.messages.length - 1]?.id,
-  (id, prev) => {
-    if (prev !== undefined && id !== prev && props.messages?.[props.messages.length - 1]?.direction === 'in') {
-      suggestion.value = null
-    }
-  },
-)
-watch(
-  [() => props.conversation.id, () => props.messages?.[props.messages.length - 1]?.id, () => props.conversation.handler, aiConfigured, autoSuggest, suggestion],
+  [() => props.conversation.id, pendingInboundId, () => props.conversation.handler, aiConfigured, autoSuggest, suggestion],
   maybeAutoSuggest,
   { immediate: true },
 )
@@ -325,6 +408,7 @@ const handler = computed({
       />
       <el-segmented
         v-model="handler"
+        class="handler-seg"
         size="small"
         :options="[
           { label: 'AI 接待', value: 'bot' },
@@ -364,42 +448,62 @@ const handler = computed({
       </span>
     </div>
 
-    <div ref="scroller" class="t-body" @scroll.passive="onScroll">
-      <div v-if="hasMore" class="more">往上捲載入更早的訊息</div>
-      <div v-if="!messages" v-loading="true" class="t-loading" />
-      <template v-for="g in groups" :key="g.key">
-        <div class="day"><span>{{ g.label }}</span></div>
-        <div v-for="m in g.items" :key="m.id" class="msg" :class="m.direction">
-          <div v-if="m.deleted" class="bubble deleted">對方已收回這則訊息</div>
-          <div v-else class="bubble" :class="[m.senderType, { media: !!m.mediaUrl, reacted: !!m.reaction }]">
-            <template v-if="m.mediaUrl">
-              <video v-if="m.kind === 'video'" :src="m.mediaUrl" controls preload="metadata" class="img video" />
-              <audio v-else-if="m.kind === 'audio'" :src="m.mediaUrl" controls preload="metadata" class="audio" />
-              <el-image
-                v-else-if="isImageKind(m.kind)"
-                :src="m.mediaUrl"
-                :preview-src-list="[m.mediaUrl]"
-                fit="cover"
-                class="img"
-                preview-teleported
-              >
-                <template #error><div class="img-gone">圖片已無法顯示</div></template>
-              </el-image>
-            </template>
-            <div v-if="m.text" class="text">{{ m.text }}</div>
-            <span v-if="m.reaction" class="reaction" :aria-label="`顧客回應 ${m.reaction}`">{{ m.reaction }}</span>
-          </div>
-          <div class="meta">
-            <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ m.sentBy?.displayName || senderLabel[m.senderType] }}</span>
-            {{ clockTime(m.createdAt) }}
-            <span v-if="m.id === lastSeenOutId" class="seen">已讀</span>
-            <template v-if="isAutoReply(m)">
-              <span v-if="flagged.has(m.id)" class="flag-done">已標記有誤</span>
-              <button v-else type="button" class="flag-wrong" @click="openWrong(m)">回答有誤</button>
-            </template>
+    <div class="t-main">
+      <div ref="scroller" class="t-body" @scroll.passive="onScroll">
+        <div ref="inner" class="t-inner">
+          <div v-if="hasMore" class="more">往上捲載入更早的訊息</div>
+          <div v-if="!messages" v-loading="true" class="t-loading" />
+          <template v-for="g in groups" :key="g.key">
+            <div class="day"><span>{{ g.label }}</span></div>
+            <div v-for="m in g.items" :key="m.id" class="msg" :class="m.direction">
+              <div v-if="m.deleted" class="bubble deleted">對方已收回這則訊息</div>
+              <div v-else class="bubble" :class="[m.senderType, { media: !!m.mediaUrl, reacted: !!m.reaction }]">
+                <template v-if="m.mediaUrl">
+                  <video v-if="m.kind === 'video'" :src="m.mediaUrl" controls preload="metadata" class="img video" />
+                  <audio v-else-if="m.kind === 'audio'" :src="m.mediaUrl" controls preload="metadata" class="audio" />
+                  <el-image
+                    v-else-if="isImageKind(m.kind)"
+                    :src="m.mediaUrl"
+                    :preview-src-list="[m.mediaUrl]"
+                    fit="cover"
+                    class="img"
+                    preview-teleported
+                  >
+                    <template #error><div class="img-gone">圖片已無法顯示</div></template>
+                  </el-image>
+                </template>
+                <div v-if="m.text" class="text">{{ m.text }}</div>
+                <span v-if="m.reaction" class="reaction" :aria-label="`顧客回應 ${m.reaction}`">{{ m.reaction }}</span>
+              </div>
+              <div class="meta">
+                <span v-if="m.direction === 'out'" class="by" :class="m.senderType">{{ m.sentBy?.displayName || senderLabel[m.senderType] }}</span>
+                {{ clockTime(m.createdAt) }}
+                <span v-if="m.id === lastSeenOutId" class="seen">已讀</span>
+                <template v-if="isAutoReply(m)">
+                  <span v-if="flagged.has(m.id)" class="flag-done">已標記有誤</span>
+                  <button v-else type="button" class="flag-wrong" @click="openWrong(m)">回答有誤</button>
+                </template>
+              </div>
+            </div>
+          </template>
+          <div v-for="p in pending" :key="p.tmpId" class="msg out pending" :class="p.status">
+            <div class="bubble human"><div class="text">{{ p.text }}</div></div>
+            <div class="meta">
+              <template v-if="p.status === 'failed'">
+                <span class="send-fail">傳送失敗</span>
+                <button type="button" class="send-act" @click="emit('retry', p.tmpId)">重送</button>
+                <button type="button" class="send-act" @click="emit('discard', p.tmpId)">刪除</button>
+              </template>
+              <template v-else>
+                <el-icon class="clock"><Clock /></el-icon>{{ p.status === 'queued' ? '等待中' : '傳送中' }}
+              </template>
+            </div>
           </div>
         </div>
-      </template>
+      </div>
+      <button v-if="unseen > 0" type="button" class="new-pill" @click="jumpNew">
+        ↓ {{ unseen > 1 ? `${unseen} 則新訊息` : '新訊息' }}
+      </button>
     </div>
 
     <footer class="t-foot">
@@ -451,8 +555,9 @@ const handler = computed({
         <el-icon><WarningFilled /></el-icon>
         <span>{{ suggestion.warning }}</span>
       </div>
-      <div class="composer">
+      <div ref="composerEl" class="composer">
         <el-input
+          ref="inputRef"
           v-model="draft"
           type="textarea"
           :autosize="{ minRows: 1, maxRows: 5 }"
@@ -466,14 +571,14 @@ const handler = computed({
           circle
           size="large"
           :icon="Promotion"
-          :loading="sending"
           :disabled="!draft.trim() || !canSend"
+          @mousedown.prevent
           @click="submit"
         />
       </div>
     </footer>
 
-    <el-dialog v-model="wrongOpen" width="min(460px, 92vw)" append-to-body align-center>
+    <el-dialog class="lc-fs-dialog" :fullscreen="isMobile" v-model="wrongOpen" width="min(460px, 92vw)" append-to-body align-center>
       <template #header>
         標記回答有誤
         <HelpTip text="會記到「自動回覆 → 待改進」，之後可補進知識庫或調整規則。" />
@@ -587,10 +692,24 @@ const handler = computed({
   max-height: 120px;
   overflow-y: auto;
 }
+.t-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .t-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain; // 捲到頭不把頁面一起帶著走
+  overflow-anchor: none; // 載入更早訊息的位置補償由程式負責（Safari 沒有 scroll anchoring，兩邊一致）
+  -webkit-overflow-scrolling: touch;
   padding: 12px 16px 20px;
+}
+.new-pill {
+  display: none;
 }
 .t-loading {
   height: 120px;
@@ -701,6 +820,31 @@ const handler = computed({
   display: block;
   width: 240px;
   max-width: 100%;
+}
+.pending {
+  &.sending,
+  &.queued {
+    opacity: 0.6;
+  }
+  .clock {
+    margin-right: 3px;
+    vertical-align: -2px;
+  }
+}
+.send-fail {
+  margin-right: 6px;
+  color: var(--lc-fail-fg);
+  font-weight: 500;
+}
+.send-act {
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--el-color-primary);
+  text-decoration: underline;
+  cursor: pointer;
 }
 .seen {
   margin-left: 4px;
@@ -877,18 +1021,160 @@ const handler = computed({
   }
 }
 @media (max-width: 768px) {
-  .t-head .back {
-    display: inline-flex;
-    margin-left: -6px;
+  .t-head {
+    gap: 8px;
+    padding: 6px 10px;
+    min-height: 56px;
+    .back {
+      display: inline-flex;
+      margin-left: -4px;
+    }
+    :deep(.el-button.is-circle),
+    :deep(.el-button--small.is-circle) {
+      width: 40px;
+      height: 40px;
+    }
+    flex-wrap: wrap;
+    // 第二列：接待方式切換全寬，兩個選項各半，好點
+    .handler-seg {
+      order: 9;
+      flex: 1 0 100%;
+      font-size: 14px;
+      padding: 3px;
+      :deep(.el-segmented__group) {
+        display: flex;
+        width: 100%;
+      }
+      :deep(.el-segmented__item) {
+        flex: 1;
+        justify-content: center;
+        min-height: 40px;
+      }
+    }
   }
-  .t-head :deep(.el-segmented) {
-    font-size: 12px;
+  .t-body {
+    padding: 12px 12px 16px;
   }
   .bubble {
     max-width: 82%;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+  .meta,
+  .more,
+  .who .handle {
+    font-size: 13px;
+  }
+  .send-act {
+    padding: 13px 8px;
+    margin: -13px 4px -13px 0;
+  }
+  .flag-wrong,
+  .flag-done {
+    display: inline-block;
+    padding: 13px 8px;
+    margin: -13px 0 -13px 0; // 點擊範圍 ≥40px 但不撐高訊息列
+  }
+  .video {
+    width: min(260px, 100%);
+  }
+  .new-pill {
+    display: block;
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    height: 40px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--lc-espresso);
+    color: var(--lc-on-fill);
+    font: inherit;
+    font-size: 14px;
+    box-shadow: var(--lc-tip-shadow);
+    cursor: pointer;
   }
   .t-foot {
-    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
+    &:focus-within {
+      padding-bottom: 8px; // 鍵盤彈出時底部已不是 home indicator
+    }
+  }
+  .window {
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .ai-bar {
+    flex-wrap: nowrap;
+    margin-bottom: 4px;
+    :deep(.el-button) {
+      height: 40px;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    :deep(.help-tip) {
+      flex-shrink: 0;
+    }
+    .ai-tag {
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+  }
+  .auto-row {
+    min-height: 40px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  // 建議候選：左右滑的一列，一次露出約一張半
+  .ai-picks {
+    gap: 8px;
+    margin: 0 0 6px;
+    padding-right: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+  .pick {
+    flex: 0 0 78%;
+    min-width: 0;
+    scroll-snap-align: start;
+    min-height: 64px;
+  }
+  .pick-label {
+    font-size: 13px;
+  }
+  .pick-text {
+    font-size: 14px;
+    -webkit-line-clamp: 2;
+  }
+  .pick-close {
+    position: static;
+    flex: 0 0 40px;
+    width: 40px;
+    height: auto;
+    min-height: 64px;
+    scroll-snap-align: end;
+  }
+  .pick-loading,
+  .ai-warn {
+    font-size: 13px;
+  }
+  .composer {
+    gap: 8px;
+    :deep(.el-textarea__inner) {
+      font-size: 16px; // iOS 聚焦時 <16px 會自動放大頁面
+      min-height: 40px !important;
+      padding: 9px 14px;
+    }
   }
 }
 .via {

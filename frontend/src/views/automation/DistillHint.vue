@@ -38,4 +38,11 @@ const emit = defineEmits<{ go: [] }>()
     font-weight: 500;
   }
 }
+@media (max-width: 768px) {
+  .distill-hint {
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+}
 </style>

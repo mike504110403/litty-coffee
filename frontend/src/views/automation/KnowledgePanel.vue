@@ -166,4 +166,11 @@ async function remove(k: Knowledge) {
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .i-foot {
+    font-size: 13px;
+  }
+}
 </style>

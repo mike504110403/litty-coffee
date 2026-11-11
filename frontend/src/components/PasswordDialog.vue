@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { reactive, ref, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { settingsApi } from '@/api/settings'
+
+const isMobile = useIsMobile()
 
 const visible = defineModel<boolean>({ required: true })
 
@@ -47,7 +50,7 @@ async function save() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="修改密碼" width="min(400px, 92vw)" append-to-body>
+  <el-dialog class="lc-fs-dialog" :fullscreen="isMobile" v-model="visible" title="修改密碼" width="min(400px, 92vw)" append-to-body>
     <el-form ref="formRef" :model="pw" :rules="rules" label-position="top" @submit.prevent="save">
       <el-form-item label="目前密碼" prop="current">
         <el-input v-model="pw.current" type="password" show-password autocomplete="current-password" />

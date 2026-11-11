@@ -39,4 +39,10 @@ const account = computed(() => (props.id == null ? null : (accounts.byId.get(pro
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+@media (max-width: 768px) {
+  .acc-tag {
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
 </style>

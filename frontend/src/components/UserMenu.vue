@@ -227,4 +227,14 @@ async function onLogout() {
     color: var(--lc-fail-fg);
   }
 }
+@media (max-width: 768px) {
+  // 手機頂欄頭像：視覺 34px，點擊範圍 40px
+  .trigger.top {
+    display: grid;
+    place-items: center;
+    min-width: 40px;
+    min-height: 40px;
+    margin-right: -3px;
+  }
+}
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatLineRound, MagicStick } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
@@ -11,11 +11,12 @@ import ConversationList from './ConversationList.vue'
 import ChatThread from './ChatThread.vue'
 import SimulatorDialog from './SimulatorDialog.vue'
 import ContactDrawer from '@/components/ContactDrawer.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const route = useRoute()
 const router = useRouter()
 const store = useInboxStore()
-const { conversations, active, loading, messages, hasMore, accountFilter } = storeToRefs(store)
+const { conversations, active, loading, messages, hasMore, accountFilter, pending } = storeToRefs(store)
 const accounts = useAccountsStore()
 
 const routeId = computed(() => {
@@ -41,15 +42,59 @@ onMounted(async () => {
 })
 
 const select = (id: number) => router.push({ name: 'inbox', params: { id } })
-const back = () => router.push({ name: 'inbox' })
+// 返回：從清單點進來的 → 退回上一頁（清單的捲動位置由瀏覽器／router 還原，「上一頁」也不會又回到對話）；
+// 直接開對話連結進來的 → 取代成清單，避免退出收件匣
+const back = () => {
+  if (window.history.state?.back === '/inbox') router.back()
+  else void router.replace({ name: 'inbox' })
+}
 
-async function send(text: string) {
-  if (active.value) await store.send(active.value.id, text)
+// 手機的對話頁是全螢幕覆蓋層：鎖住底下清單頁的捲動；鍵盤彈出時覆蓋層跟著可視區縮放（輸入列貼著鍵盤）
+const isMobile = useIsMobile()
+const threadOpen = computed(() => isMobile.value && !!routeId.value)
+const vv = ref<{ top: number; height: number } | null>(null)
+const threadStyle = computed(() =>
+  threadOpen.value && vv.value ? { top: `${vv.value.top}px`, height: `${vv.value.height}px`, bottom: 'auto' } : undefined,
+)
+function syncVv() {
+  const v = window.visualViewport
+  vv.value = v ? { top: v.offsetTop, height: v.height } : null
+}
+let locked = false
+function applyLock() {
+  const want = threadOpen.value
+  if (want === locked) return
+  locked = want
+  document.documentElement.classList.toggle('lc-inbox-lock', want)
+  const v = window.visualViewport
+  if (want) {
+    syncVv()
+    v?.addEventListener('resize', syncVv)
+    v?.addEventListener('scroll', syncVv)
+  } else {
+    v?.removeEventListener('resize', syncVv)
+    v?.removeEventListener('scroll', syncVv)
+  }
+}
+watch(threadOpen, applyLock, { immediate: true })
+onActivated(applyLock)
+const release = () => {
+  if (!locked) return
+  locked = false
+  document.documentElement.classList.remove('lc-inbox-lock')
+  window.visualViewport?.removeEventListener('resize', syncVv)
+  window.visualViewport?.removeEventListener('scroll', syncVv)
+}
+onDeactivated(release)
+onBeforeUnmount(release)
+
+function send(text: string) {
+  if (active.value) store.send(active.value.id, text)
 }
 </script>
 
 <template>
-  <div class="inbox" :class="{ 'has-active': !!routeId }">
+  <div class="inbox lc-m" :class="{ 'has-active': !!routeId }">
     <section class="pane-list lc-card">
       <div class="list-title">
         <h1>收件匣</h1>
@@ -66,12 +111,15 @@ async function send(text: string) {
       />
     </section>
 
-    <section class="pane-thread lc-card">
+    <section class="pane-thread lc-card" :style="threadStyle">
       <ChatThread
         v-if="active"
         :conversation="active"
         :messages="messages[active.id]"
         :has-more="!!hasMore[active.id]"
+        :pending="pending[active.id]"
+        @retry="(id) => store.retrySend(active!.id, id)"
+        @discard="(id) => store.discardPending(active!.id, id)"
         @back="back"
         :send-fn="send"
         @load-older="store.loadOlder(active.id)"
@@ -91,6 +139,15 @@ async function send(text: string) {
     <ContactDrawer :contact-id="contactId" @close="contactId = null" />
   </div>
 </template>
+
+<style lang="scss">
+@media (max-width: 768px) {
+  html.lc-inbox-lock {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
+</style>
 
 <style scoped lang="scss">
 .inbox {
@@ -158,6 +215,11 @@ async function send(text: string) {
       }
       &:has(> :only-child) {
         display: none;
+      }
+      :deep(.el-button) {
+        height: 40px;
+        padding: 0 16px;
+        font-size: 14px;
       }
     }
   }

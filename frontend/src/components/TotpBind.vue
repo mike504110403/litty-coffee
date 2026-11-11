@@ -195,4 +195,11 @@ const grouped = (s: string) => s.replace(/(.{4})/g, '$1 ').trim()
     flex-direction: column;
   }
 }
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .secret-label {
+    font-size: 13px;
+  }
+}
 </style>

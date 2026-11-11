@@ -254,4 +254,40 @@ const count = (k: Tab) =>
   font-size: 12px;
   color: var(--lc-muted);
 }
+
+@media (max-width: 768px) {
+  .head {
+    padding: 8px 14px 10px;
+    :deep(.el-input__wrapper) {
+      min-height: 40px;
+    }
+    :deep(.el-input__inner) {
+      font-size: 16px; // iOS 聚焦時 <16px 會自動放大頁面
+    }
+  }
+  .acc-filter :deep(.el-select__wrapper) {
+    min-height: 40px;
+    font-size: 16px;
+  }
+  .tabs {
+    margin-top: 8px;
+  }
+  .tab {
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .tab-count,
+  .badge {
+    font-size: 12px;
+  }
+  .time,
+  .handle,
+  .chip {
+    font-size: 13px;
+  }
+  .preview {
+    font-size: 14px;
+  }
+}
 </style>

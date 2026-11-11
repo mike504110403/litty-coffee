@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { devApi } from '@/api/inbox'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import HelpTip from '@/components/HelpTip.vue'
+
+const isMobile = useIsMobile()
 
 const visible = defineModel<boolean>({ required: true })
 
@@ -53,7 +56,7 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
 </script>
 
 <template>
-  <el-dialog v-model="visible" width="min(440px, 92vw)" align-center>
+  <el-dialog class="lc-fs-dialog" :fullscreen="isMobile" v-model="visible" width="min(440px, 92vw)" align-center>
     <template #header>
       模擬客人傳 DM
       <HelpTip text="開發模式專用：組出和 IG webhook 相同格式的事件，走完整的入庫流程。" />

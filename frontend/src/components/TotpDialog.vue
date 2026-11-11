@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { useIsMobile } from '@/composables/useIsMobile'
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import TotpBind from './TotpBind.vue'
 import RecoveryCodes from './RecoveryCodes.vue'
+
+const isMobile = useIsMobile()
 
 // 頭像選單「綁定 Google Authenticator」（一般管理員自選；超管在 /setup 強制綁）
 const visible = defineModel<boolean>({ required: true })
@@ -28,7 +31,7 @@ async function done() {
 </script>
 
 <template>
-  <el-dialog
+  <el-dialog class="lc-fs-dialog" :fullscreen="isMobile"
     v-model="visible"
     :title="codes.length ? '保存備援碼' : '綁定 Google Authenticator'"
     width="min(520px, 92vw)"

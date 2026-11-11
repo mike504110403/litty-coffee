@@ -24,7 +24,7 @@ const tab = computed<TabKey>({
 </script>
 
 <template>
-  <div class="admins-page">
+  <div class="admins-page lc-m">
     <h1 class="lc-page-title lc-page-title--solo">管理員</h1>
 
     <PillTabs v-if="tabs.length > 1" v-model="tab" :tabs="tabs" class="tabs" />

@@ -50,4 +50,9 @@ onMounted(() => void accounts.ensure())
   font-size: 12px;
   color: var(--lc-faint);
 }
+@media (max-width: 768px) {
+  .off {
+    font-size: 13px;
+  }
+}
 </style>

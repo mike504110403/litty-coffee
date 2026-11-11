@@ -452,6 +452,7 @@ const matchTypeOptions: MatchType[] = ['contains', 'exact', 'regex']
     </div>
 
     <el-dialog
+      class="lc-fs-dialog"
       v-model="dialog"
       :title="editing?.suggestion.type === 'rule' ? '編輯後採用：關鍵字規則' : '編輯後採用：知識庫'"
       :fullscreen="isMobile"
@@ -857,6 +858,21 @@ footer {
     .el-button {
       flex: 1;
     }
+  }
+}
+
+@media (max-width: 768px) {
+  // 手機字級 ≥13px（桌機維持原值）
+  .last .lbl,
+  .g-title .n,
+  .card header,
+  .conf,
+  .mt,
+  .kw,
+  .ev-toggle,
+  .done,
+  .missing {
+    font-size: 13px;
   }
 }
 </style>

@@ -97,7 +97,7 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
     :size="isMobile ? '85%' : 'min(760px, 90vw)'"
     :direction="isMobile ? 'btt' : 'rtl'"
     :with-header="false"
-    :class="{ 'sheet': isMobile }"
+    :class="{ sheet: isMobile, 'lc-m-drawer': isMobile }"
   >
     <div v-if="isMobile" class="grab" />
     <el-button class="close" text circle :icon="Close" aria-label="關閉" @click="emit('close')" />
@@ -331,6 +331,36 @@ h4 {
   }
   .col + .col h4:first-child {
     margin-top: 18px;
+  }
+  .close {
+    top: 6px;
+    right: 6px;
+    width: 40px;
+    height: 40px;
+  }
+  .risk-meta,
+  .throttle-note,
+  .facts,
+  .stats span,
+  .handle,
+  .intent,
+  .tag {
+    font-size: 13px;
+  }
+  .risk-info {
+    font-size: 14px;
+  }
+  .tag {
+    line-height: 26px;
+  }
+  .intent {
+    padding: 6px 12px;
+  }
+  .top {
+    padding-right: 44px;
+    :deep(.el-button) {
+      min-height: 40px;
+    }
   }
 }
 .tag-select {
