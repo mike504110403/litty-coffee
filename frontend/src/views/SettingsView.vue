@@ -2,13 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Connection, CopyDocument, Key } from '@element-plus/icons-vue'
+import { Connection, CopyDocument, Key, Guide } from '@element-plus/icons-vue'
 import { settingsApi, type SettingsInfo } from '@/api/settings'
 import { useAuthStore } from '@/stores/auth'
 import HelpTip from '@/components/HelpTip.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import CredentialsPanel from '@/views/settings/CredentialsPanel.vue'
 import IgAccountsPanel from '@/views/settings/IgAccountsPanel.vue'
+import OnboardingGuide from '@/views/settings/OnboardingGuide.vue'
 import { useAccountsStore } from '@/stores/accounts'
 
 const route = useRoute()
@@ -18,10 +19,12 @@ const auth = useAuthStore()
 const canIg = computed(() => auth.can('ig_accounts'))
 const canCreds = computed(() => auth.can('credentials'))
 
-type TabKey = 'ig' | 'credentials'
+type TabKey = 'ig' | 'credentials' | 'guide'
 const sections = computed(() => [
   ...(canIg.value ? [{ key: 'ig' as TabKey, label: 'IG 帳號', icon: Connection }] : []),
   ...(canCreds.value ? [{ key: 'credentials' as TabKey, label: '憑證', icon: Key }] : []),
+  // 接帳號流程：只給超管
+  ...(auth.user?.isSuper ? [{ key: 'guide' as TabKey, label: '接帳號流程', icon: Guide }] : []),
 ])
 // 網址帶 ?tab=，重新整理停在同一區；值不合法或沒權限就退回第一個可用區塊
 const tab = computed<TabKey>({
@@ -158,6 +161,7 @@ const insecurePublic = computed(() => !!integ.value && !integ.value.publicBaseUr
           </section>
         </template>
 
+        <OnboardingGuide v-else-if="tab === 'guide'" />
         <CredentialsPanel v-else @saved="onCredsSaved" />
       </div>
     </div>
