@@ -45,7 +45,7 @@ export interface Conversation {
   contact: Contact
 }
 
-export type SenderType = 'contact' | 'bot' | 'ai' | 'human'
+export type SenderType = 'contact' | 'bot' | 'ai' | 'human' | 'system' // system：系統註記（不送 IG），顯示成對話中間的灰字
 
 export interface Message {
   id: number
@@ -73,6 +73,16 @@ export interface Suggestion {
   warning?: string // 知識庫沒涵蓋或需店員判斷的地方
 }
 
+// 背景產生的 AI 建議（GET）：ready 才有 options；forMessageId 是它對應的顧客訊息
+export interface SuggestionState {
+  status: 'ready' | 'pending' | 'failed' | 'none'
+  forMessageId: number
+  options: SuggestOption[]
+  warning: string
+  error: string
+  createdAt: string
+}
+
 export const inboxApi = {
   list: (params: { status?: string; q?: string; account?: number } = {}) =>
     http.get<Conversation[]>('/conversations', { params }).then((r) => r.data),
@@ -85,6 +95,12 @@ export const inboxApi = {
   send: (id: number, text: string) => http.post<Message>(`/conversations/${id}/messages`, { text }).then((r) => r.data),
   // 收件匣用的 AI 狀態（只需收件匣權限）：沒設 Claude key 就不顯示「AI 建議」
   aiStatus: () => http.get<{ configured: boolean }>('/inbox/ai').then((r) => r.data),
+  // 讀背景產生好的建議；後端還沒上線（404）或任何失敗都回 null，不跳錯誤、呼叫端退回 POST
+  getSuggestion: (id: number) =>
+    http
+      .get<SuggestionState>(`/conversations/${id}/suggestion`, { validateStatus: () => true })
+      .then((r) => (r.status >= 200 && r.status < 300 && r.data && typeof r.data === 'object' ? r.data : null))
+      .catch(() => null),
   // silent＝失敗（含 429、503）不跳錯誤提示、回 null；自動擬稿用，免得翻對話時一直跳提示
   suggest: (id: number, silent = false) =>
     http

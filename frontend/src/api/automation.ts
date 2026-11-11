@@ -35,7 +35,11 @@ export interface AutoSettings {
   autoReplyEnabled: boolean // 自動回覆總開關：關閉＝只收不回（不跑規則、AI、轉真人通知）
   digestTime: string // 每日摘要產生時間（店家時區 HH:MM）
   distillWeekly: boolean // 每週一 09:00 自動蒸餾近 7 天對話成建議（不會自動生效）
+  postsKbEnabled: boolean // 自動回覆／建議／寫文案參考近期 IG 貼文文案
+  humanIdleMinutes: number // 真人多久沒回就交回 AI；只接受 0（關閉）、5、10、15、30、60
 }
+
+export const HUMAN_IDLE_OPTIONS = [0, 5, 10, 15, 30, 60] as const
 
 export interface AIDecision {
   action: 'reply' | 'handoff'
@@ -80,6 +84,9 @@ export const automationApi = {
   settings: (account: number) => http.get<AutoSettings>('/automation/settings', acc(account)).then((r) => r.data),
   saveSettings: (account: number, s: AutoSettings) =>
     http.put<AutoSettings>('/automation/settings', s, acc(account)).then((r) => r.data),
+  // 只切單一欄位（其他設定不動）
+  patchSettings: (account: number, patch: Partial<AutoSettings>) =>
+    http.put<AutoSettings>('/automation/settings', patch, acc(account)).then((r) => r.data),
   // 只切總開關（其他設定不動）
   setAutoReply: (account: number, enabled: boolean) =>
     http.put<AutoSettings>('/automation/settings', { autoReplyEnabled: enabled }, acc(account)).then((r) => r.data),

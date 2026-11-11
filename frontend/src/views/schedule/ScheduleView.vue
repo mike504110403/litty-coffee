@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, Plus, Loading, CircleCheck, Warning, Clock, EditPen } from '@element-plus/icons-vue'
-import { kindLabels, postsApi, statusLabels, type Post, type PostStatus } from '@/api/posts'
+import { ArrowLeft, ArrowRight, Plus, Loading, CircleCheck, Warning, Clock, EditPen, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { kindLabels, postThumb, postsApi, statusLabels, type Post, type PostStatus } from '@/api/posts'
 import { crmApi } from '@/api/crm'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import PostComposer from './PostComposer.vue'
 import PostInsights from './PostInsights.vue'
+import PostViewer from './PostViewer.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import AccountTag from '@/components/AccountTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
@@ -148,14 +150,93 @@ function openNew(day?: Date) {
   } else defaultDate.value = null
   composerOpen.value = true
 }
+// 從 IG 同步進來的貼文（source='ig'）只能檢視；後台發的才進編輯器
+const viewerOpen = ref(false)
+const viewing = ref<Post | null>(null)
 function openPost(p: Post) {
+  if (p.source === 'ig') {
+    viewing.value = p
+    viewerOpen.value = true
+    return
+  }
   editing.value = p
   composerOpen.value = true
 }
-// 更新數據後就地換掉清單與編輯器裡那篇，不必整頁重載
+// 更新數據後就地換掉清單、編輯器與檢視裡那篇，不必整頁重載
 function onInsightsUpdated(np: Post) {
   posts.value = posts.value.map((p) => (p.id === np.id ? np : p))
   if (editing.value?.id === np.id) editing.value = np
+  if (viewing.value?.id === np.id) viewing.value = np
+}
+
+// ---- 同步 IG 貼文：選了帳號就同步該帳號，「全部帳號」逐一同步；每帳號 1 分鐘冷卻（後端 429） ----
+const syncing = ref(false)
+const cooldownUntil = ref<Record<number, number>>({}) // 帳號 id → 可再同步的時間（ms）
+const nowTick = ref(Date.now())
+let cdTimer: ReturnType<typeof setInterval> | undefined
+const syncTargets = computed(() =>
+  accountFilter.value != null ? [accountFilter.value] : accounts.list.filter((a) => a.active).map((a) => a.id),
+)
+// 目前要同步的帳號都在冷卻時，回傳最短剩餘秒數；否則 0
+const cooldownLeft = computed(() => {
+  const left = syncTargets.value.map((id) => Math.ceil(((cooldownUntil.value[id] ?? 0) - nowTick.value) / 1000))
+  return left.length && left.every((n) => n > 0) ? Math.min(...left) : 0
+})
+function startCooldownTicker() {
+  nowTick.value = Date.now()
+  if (cdTimer) return
+  cdTimer = setInterval(() => {
+    nowTick.value = Date.now()
+    if (Object.values(cooldownUntil.value).every((t) => t <= nowTick.value)) {
+      clearInterval(cdTimer)
+      cdTimer = undefined
+    }
+  }, 1000)
+}
+onBeforeUnmount(() => clearInterval(cdTimer))
+
+async function syncIg() {
+  if (syncing.value || cooldownLeft.value > 0) return
+  const targets = syncTargets.value.filter((id) => (cooldownUntil.value[id] ?? 0) <= Date.now())
+  if (!targets.length) {
+    ElMessage.info('沒有可同步的帳號')
+    return
+  }
+  syncing.value = true
+  let nPosts = 0
+  let nStories = 0
+  const succeeded: number[] = []
+  const problems: string[] = []
+  try {
+    for (const id of targets) {
+      const r = await postsApi.syncMedia(id)
+      const who = accounts.multi ? `${accounts.label(id)}：` : ''
+      if (r.ok) {
+        nPosts += r.posts
+        nStories += r.stories
+        succeeded.push(id)
+        continue
+      }
+      if (r.status === 429) {
+        cooldownUntil.value = { ...cooldownUntil.value, [id]: Date.now() + r.retryAfter * 1000 }
+        startCooldownTicker()
+        problems.push(`${who}剛同步過，請 ${r.retryAfter} 秒後再試`)
+      } else if (r.status === 409) problems.push(`${who}${r.error || '尚未連結 IG（沒有可用的 token）'}`)
+      else problems.push(`${who}${r.error || 'IG 暫時無法回應，請稍後再試'}`)
+    }
+  } finally {
+    syncing.value = false
+  }
+  if (succeeded.length) {
+    ElMessage.success(`同步完成：新增／更新 ${nPosts} 篇、限動 ${nStories} 則`)
+    // 同步成功的帳號也進 1 分鐘冷卻（對齊後端），避免連點
+    const next = { ...cooldownUntil.value }
+    for (const id of succeeded) if ((next[id] ?? 0) <= Date.now()) next[id] = Date.now() + 60_000
+    cooldownUntil.value = next
+    startCooldownTicker()
+    await load()
+  }
+  if (problems.length) ElMessage({ type: 'warning', message: problems.join('；'), duration: 6000 })
 }
 const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
 </script>
@@ -167,7 +248,18 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
         <h1 class="lc-page-title lc-page-title--solo">排程</h1>
       </div>
       <div class="controls">
-        <AccountSelect v-if="accounts.multi" v-model="accountFilter" allow-all class="acc-filter" />
+        <div class="ctl-filter">
+          <AccountSelect v-if="accounts.multi" v-model="accountFilter" allow-all class="acc-filter" />
+          <el-button
+            class="sync-btn"
+            :icon="Refresh"
+            :loading="syncing"
+            :disabled="cooldownLeft > 0 || !accounts.list.length"
+            @click="syncIg"
+          >
+            <span class="sync-text">{{ cooldownLeft > 0 ? `${cooldownLeft} 秒後可再同步` : '同步 IG 貼文' }}</span>
+          </el-button>
+        </div>
         <el-segmented
           v-model="view"
           :options="[
@@ -213,14 +305,15 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
             v-for="p in byDay.get(dayKey(d)) ?? []"
             :key="p.id"
             class="chip"
-            :class="p.status"
-            :title="`${hhmm(p.scheduledAt!)} ${kindLabels[p.kind]} · ${statusLabels[p.status]} · ${accounts.label(p.igAccountId)}`"
+            :class="[p.status, { ig: p.source === 'ig' }]"
+            :title="`${hhmm(p.scheduledAt!)} ${kindLabels[p.kind]} · ${p.source === 'ig' ? 'IG 發佈' : statusLabels[p.status]} · ${accounts.label(p.igAccountId)}`"
             @click.stop="openPost(p)"
           >
-            <img v-if="p.media[0]?.kind === 'image'" :src="p.media[0].url" alt="" />
+            <img v-if="postThumb(p)" :src="postThumb(p)" alt="" />
             <el-icon class="st" :class="{ spin: p.status === 'publishing' }"><component :is="statusIcon[p.status]" /></el-icon>
             <span class="t">{{ hhmm(p.scheduledAt!) }}</span>
             <span class="k">{{ kindLabels[p.kind] }}</span>
+            <span v-if="p.source === 'ig'" class="ig-mark">IG</span>
             <AccountTag v-if="accounts.multi" :id="p.igAccountId" compact class="acc" />
           </button>
         </div>
@@ -241,13 +334,15 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
           @keydown.enter.self="openPost(p)"
         >
           <div class="ag-thumb">
-            <video v-if="p.media[0]?.kind === 'video'" :src="p.media[0].url" muted />
+            <img v-if="p.source === 'ig' && p.igThumb" :src="p.igThumb" alt="" />
+            <video v-else-if="p.media[0]?.kind === 'video'" :src="p.media[0].url" muted />
             <img v-else-if="p.media[0]" :src="p.media[0].url" alt="" />
           </div>
           <div class="ag-main">
             <div class="ag-top">
               <span class="ag-time">{{ hhmm(p.scheduledAt!) }}</span>
-              <span class="ag-kind">{{ kindLabels[p.kind] }}<template v-if="p.kind === 'carousel'"> · {{ p.media.length }} 張</template></span>
+              <span class="ag-kind">{{ kindLabels[p.kind] }}<template v-if="p.kind === 'carousel' && p.media.length"> · {{ p.media.length }} 張</template></span>
+              <span v-if="p.source === 'ig'" class="ig-tag">IG 發佈</span>
               <AccountTag v-if="accounts.multi" :id="p.igAccountId" />
               <span class="badge" :class="p.status">
                 <el-icon :class="{ spin: p.status === 'publishing' }"><component :is="statusIcon[p.status]" /></el-icon>
@@ -265,6 +360,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
       </el-empty>
     </div>
 
+    <PostViewer v-model="viewerOpen" :post="viewing" @insights-updated="onInsightsUpdated" />
     <PostComposer
       v-model="composerOpen"
       :post="editing"
@@ -286,8 +382,16 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
 }
 .controls {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   align-items: center;
+}
+.ctl-filter {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
 }
 .drafts {
   display: flex;
@@ -445,6 +549,26 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   &.publishing {
     background: var(--lc-warn-bg);
   }
+  &.ig {
+    background: var(--lc-tone-caramel-bg);
+  }
+}
+.ig-mark {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  background: var(--lc-tone-caramel-fg);
+  color: var(--lc-on-fill);
+}
+.ig-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--lc-tone-caramel-bg);
+  color: var(--lc-tone-caramel-fg);
 }
 
 .agenda {
@@ -584,6 +708,22 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
     justify-content: space-between;
     margin-bottom: 12px;
   }
+  .ctl-filter {
+    width: 100%;
+    .acc-filter {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+    }
+    .sync-btn {
+      flex: none;
+      min-height: 40px;
+    }
+    // 只有一個帳號、沒有篩選器時，同步鈕撐滿一列
+    .sync-btn:only-child {
+      flex: 1;
+    }
+  }
   .cal {
     padding: 8px 4px;
   }
@@ -595,7 +735,8 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
     padding: 2px;
     justify-content: center;
     .t,
-    .k {
+    .k,
+    .ig-mark {
       display: none;
     }
   }

@@ -38,7 +38,20 @@ export interface Post {
   insightsError: string
   /** 目前能不能手動更新（限動超過 24 小時就不行） */
   insightsRefreshable: boolean
+  /** app＝後台發的；ig＝從 IG 同步進來的（唯讀） */
+  source: PostSource
+  /** 同步貼文的縮圖（直接給 <img src>）；app 為空字串 */
+  igThumb: string
+  igSyncedAt: string | null
+  /** true＝不給 AI 參考 */
+  aiExclude: boolean
 }
+
+export type PostSource = 'app' | 'ig'
+
+/** 列表／月曆用的縮圖網址：同步貼文用 igThumb，後台貼文用第一張圖 */
+export const postThumb = (p: Post): string =>
+  p.source === 'ig' ? p.igThumb : p.media[0]?.kind === 'image' ? p.media[0].url : ''
 
 export type InsightKey = 'views' | 'reach' | 'likes' | 'comments' | 'saved' | 'shares' | 'replies'
 
@@ -83,8 +96,13 @@ export const MAX_CAPTION = 2200
 export const MAX_HASHTAGS = 30
 export const countHashtags = (s: string) => (s.match(/#[\p{L}\p{N}_]+/gu) ?? []).length
 
+/** 手動同步 IG 貼文的結果：200 成功；429 冷卻（retryAfter 秒）；409 帳號沒有 token；502 IG 回錯誤 */
+export type SyncMediaResult =
+  | { ok: true; posts: number; stories: number }
+  | { ok: false; status: 429 | 409 | 502; error: string; retryAfter: number }
+
 export const postsApi = {
-  list: (params: { from?: string; to?: string; status?: string; account?: number } = {}) =>
+  list: (params: { from?: string; to?: string; status?: string; account?: number; source?: PostSource } = {}) =>
     http.get<Post[]>('/posts', { params }).then((r) => r.data),
   upcomingCount: (account?: number) =>
     http.get<{ count: number }>('/posts/upcoming-count', { params: { account } }).then((r) => r.data.count),
@@ -95,6 +113,25 @@ export const postsApi = {
   refreshInsights: (id: number) =>
     http.post<Post>(`/posts/${id}/insights/refresh`, null, { timeout: 30000 }).then((r) => r.data),
   remove: (id: number) => http.delete(`/posts/${id}`),
+  // 這幾種狀態自己處理（不走全域錯誤提示）；其他錯誤（401、403、網路）仍交給攔截器
+  syncMedia: (account: number): Promise<SyncMediaResult> =>
+    http
+      .post<{ posts?: number; stories?: number; error?: string }>(`/ig/accounts/${account}/sync-media`, null, {
+        timeout: 120000,
+        validateStatus: (s) => s === 200 || s === 429 || s === 409 || s === 502,
+      })
+      .then((r) =>
+        r.status === 200
+          ? { ok: true as const, posts: r.data.posts ?? 0, stories: r.data.stories ?? 0 }
+          : {
+              ok: false as const,
+              status: r.status as 429 | 409 | 502,
+              error: r.data?.error ?? '',
+              retryAfter: Math.max(1, Number(r.headers['retry-after']) || 60),
+            },
+      ),
+  setAiExclude: (id: number, aiExclude: boolean) =>
+    http.patch<Post>(`/posts/${id}/ai-exclude`, { aiExclude }).then((r) => r.data),
   upload: (account: number, file: File, onProgress?: (pct: number) => void) => {
     const fd = new FormData()
     fd.append('file', file)

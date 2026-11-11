@@ -11,12 +11,13 @@ import RiskTag from '@/components/RiskTag.vue'
 import RiskMenu from '@/components/RiskMenu.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { useAccountsStore } from '@/stores/accounts'
-import type { PendingMessage } from '@/stores/inbox'
+import { useInboxStore, type PendingMessage } from '@/stores/inbox'
 import { clockTime, dayKey, dayLabel } from '@/utils/time'
 
 const isMobile = useIsMobile()
 
 const accountsStore = useAccountsStore()
+const inbox = useInboxStore()
 
 const props = defineProps<{
   conversation: Conversation
@@ -73,7 +74,7 @@ const lastSeenOutId = computed(() => {
   const t = new Date(readAt).getTime()
   let id = 0
   for (const m of props.messages ?? []) {
-    if (m.direction === 'out' && new Date(m.createdAt).getTime() <= t) id = m.id
+    if (m.direction === 'out' && m.senderType !== 'system' && new Date(m.createdAt).getTime() <= t) id = m.id
   }
   return id
 })
@@ -148,7 +149,7 @@ watch(
     if (last !== pLast && len > pLen && first === pFirst) {
       // 尾端新增（自己送出的已在 submit 捲到底）
       if (stick.value) toBottom()
-      else unseen.value += 1
+      else if (props.messages?.[len - 1]?.senderType !== 'system') unseen.value += 1
     }
   },
   { flush: 'post' },
@@ -247,6 +248,7 @@ onMounted(async () => {
 
 async function runSuggest(auto: boolean) {
   const convId = props.conversation.id
+  cancelWait()
   const seq = ++suggestSeq
   suggesting.value = true
   try {
@@ -266,6 +268,63 @@ function onSuggestClick() {
   void runSuggest(false)
 }
 
+// --- 自動建議：先讀後端背景擬好的（GET），沒有再退回現場擬（POST） ---
+// 候選 ready 且對應目前最後一則顧客訊息 → 直接顯示；pending → 顯示「AI 正在擬回覆…」等 suggestion.ready 再讀；
+// none／failed／404（後端還沒上線）／逾時 → 退回 POST。
+let waitingFor: { key: number; seq: number } | null = null
+let waitTimer: ReturnType<typeof setTimeout> | undefined
+const WAIT_MS = 30_000
+function cancelWait() {
+  waitingFor = null
+  clearTimeout(waitTimer)
+  waitTimer = undefined
+}
+onBeforeUnmount(cancelWait)
+
+async function fetchBackground(key: number, seq: number) {
+  const convId = props.conversation.id
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const evBefore = inbox.suggestionReady[convId]?.seq
+    const g = await inboxApi.getSuggestion(convId)
+    if (seq !== suggestSeq || convId !== props.conversation.id) return
+    if (g?.status === 'ready' && g.forMessageId === key && g.options.length) {
+      cancelWait()
+      suggesting.value = false
+      suggestion.value = { options: g.options, warning: g.warning || undefined }
+      return
+    }
+    const waiting = g?.status === 'pending' || (g?.status === 'ready' && g.forMessageId < key)
+    if (!waiting) {
+      cancelWait()
+      void runSuggest(true) // none／failed／404／不相符
+      return
+    }
+    // GET 在路上時 suggestion.ready 剛好到了 → 再讀一次，免得漏接
+    if (attempt === 0 && inbox.suggestionReady[convId]?.seq !== evBefore) continue
+    waitingFor = { key, seq }
+    suggesting.value = true // 顯示「AI 正在擬回覆…」
+    clearTimeout(waitTimer)
+    waitTimer = setTimeout(() => {
+      if (waitingFor?.seq !== seq) return
+      cancelWait()
+      void runSuggest(true) // 等太久（SSE 可能漏接）：現場擬一組
+    }, WAIT_MS)
+    return
+  }
+}
+async function autoSuggestFlow(key: number) {
+  cancelWait()
+  const seq = ++suggestSeq
+  await fetchBackground(key, seq)
+}
+watch(
+  () => inbox.suggestionReady[props.conversation.id],
+  (ev) => {
+    if (!ev || !waitingFor || waitingFor.seq !== suggestSeq) return
+    void fetchBackground(waitingFor.key, waitingFor.seq)
+  },
+)
+
 // 點一個版本：放進輸入框。輸入框已有自己打的字（不是原封不動的 AI 版本）→ 先問要不要取代
 async function pickOption(o: SuggestOption) {
   if (draft.value.trim() && !showDraftTag.value && draft.value !== o.text) {
@@ -284,6 +343,7 @@ async function pickOption(o: SuggestOption) {
 }
 
 function dismissSuggestion() {
+  cancelWait()
   suggestSeq++
   suggesting.value = false
   suggestion.value = null
@@ -296,7 +356,7 @@ const pendingInboundId = computed(() => {
   if (!list) return null
   let inboundIdx = -1
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].direction === 'in' && !list[i].deleted) {
+    if (list[i].direction === 'in' && !list[i].deleted && list[i].senderType !== 'system') {
       inboundIdx = i
       break
     }
@@ -304,7 +364,8 @@ const pendingInboundId = computed(() => {
   if (inboundIdx < 0) return null
   for (let i = list.length - 1; i > inboundIdx; i--) {
     const m = list[i]
-    if (m.direction === 'out' && !m.deleted && m.senderType !== 'ai' && m.senderType !== 'bot') return null
+    // 系統註記（例：真人閒置交回 AI）不算真人回覆
+    if (m.direction === 'out' && !m.deleted && m.senderType !== 'ai' && m.senderType !== 'bot' && m.senderType !== 'system') return null
   }
   return list[inboundIdx].id
 })
@@ -317,11 +378,12 @@ function maybeAutoSuggest() {
   const key = pendingInboundId.value
   if (key == null || autoTried.has(key)) return
   autoTried.add(key)
-  void runSuggest(true)
+  void autoSuggestFlow(key)
 }
 watch(
   () => props.conversation.id,
   () => {
+    cancelWait()
     suggestSeq++ // 作廢上一段對話還在路上的建議
     suggesting.value = false
     if (showDraftTag.value) draft.value = '' // 沒動過的 AI 版本不帶到別的對話
@@ -331,7 +393,12 @@ watch(
 )
 // 顧客又傳新訊息（最後一則顧客訊息 id 改變）→ 舊候選過時，收起來讓自動建議重新要
 watch(pendingInboundId, (id, prev) => {
-  if (prev != null && id !== prev) suggestion.value = null
+  if (prev == null || id === prev) return
+  suggestion.value = null
+  // 還在等（或現場擬）舊訊息的建議：作廢，交給自動建議對新訊息重來
+  cancelWait()
+  suggestSeq++
+  suggesting.value = false
 })
 watch(
   [() => props.conversation.id, pendingInboundId, () => props.conversation.handler, aiConfigured, autoSuggest, suggestion],
@@ -455,7 +522,9 @@ const handler = computed({
           <div v-if="!messages" v-loading="true" class="t-loading" />
           <template v-for="g in groups" :key="g.key">
             <div class="day"><span>{{ g.label }}</span></div>
-            <div v-for="m in g.items" :key="m.id" class="msg" :class="m.direction">
+            <template v-for="m in g.items" :key="m.id">
+            <div v-if="m.senderType === 'system'" class="sys-note" role="status">{{ m.text }}<span class="sys-time">{{ clockTime(m.createdAt) }}</span></div>
+            <div v-else class="msg" :class="m.direction">
               <div v-if="m.deleted" class="bubble deleted">對方已收回這則訊息</div>
               <div v-else class="bubble" :class="[m.senderType, { media: !!m.mediaUrl, reacted: !!m.reaction }]">
                 <template v-if="m.mediaUrl">
@@ -485,6 +554,7 @@ const handler = computed({
                 </template>
               </div>
             </div>
+            </template>
           </template>
           <div v-for="p in pending" :key="p.tmpId" class="msg out pending" :class="p.status">
             <div class="bubble human"><div class="text">{{ p.text }}</div></div>
@@ -719,6 +789,21 @@ const handler = computed({
   font-size: 12px;
   color: var(--lc-muted);
   padding: 4px 0 8px;
+}
+// 系統註記（例：真人閒置交回 AI）：對話中間的置中灰字，沒有氣泡
+.sys-note {
+  margin: 10px auto;
+  max-width: 90%;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lc-muted);
+  word-break: break-word;
+  .sys-time {
+    margin-left: 6px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.8;
+  }
 }
 .day {
   text-align: center;
@@ -1063,6 +1148,9 @@ const handler = computed({
   .meta,
   .more,
   .who .handle {
+    font-size: 13px;
+  }
+  .sys-note {
     font-size: 13px;
   }
   .send-act {

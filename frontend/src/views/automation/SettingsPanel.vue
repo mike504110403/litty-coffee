@@ -2,7 +2,7 @@
 import HelpTip from '@/components/HelpTip.vue'
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { automationApi, type AutoSettings } from '@/api/automation'
+import { automationApi, HUMAN_IDLE_OPTIONS, type AutoSettings } from '@/api/automation'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 const props = defineProps<{ aiConfigured: boolean; accountId: number }>()
@@ -12,8 +12,12 @@ const form = ref<AutoSettings | null>(null)
 const saving = ref(false)
 
 onMounted(async () => {
-  form.value = await automationApi.settings(props.accountId)
+  const s = await automationApi.settings(props.accountId)
+  s.humanIdleMinutes ??= 15 // 後端尚未回這個欄位時顯示預設值
+  form.value = s
 })
+
+const idleLabel = (m: number) => (m === 0 ? '關閉' : `${m} 分鐘`)
 
 // 大量訊息的時間範圍：介面用分鐘、API 用秒
 const spamMinutes = computed({
@@ -73,6 +77,15 @@ async function save() {
       <el-form-item>
         <template #label>轉真人時送出的訊息<HelpTip text="AI 沒把握、或命中「轉真人」規則時送出；留空則不送訊息，直接轉真人。" /></template>
         <el-input v-model="form.handoffMessage" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" maxlength="300" />
+      </el-form-item>
+      <el-form-item>
+        <template #label>
+          真人多久沒回，自動交回 AI
+          <HelpTip text="店員接手（轉真人）後，如果超過這段時間都沒有回覆，自動把對話交回 AI，顧客再傳訊息就由 AI 接著回；對話裡會留一則系統註記。選「關閉」＝一直由真人處理，直到手動交回。" />
+        </template>
+        <el-select v-model="form.humanIdleMinutes" class="idle-select">
+          <el-option v-for="m in HUMAN_IDLE_OPTIONS" :key="m" :label="idleLabel(m)" :value="m" />
+        </el-select>
       </el-form-item>
       <el-form-item>
         <template #label>合併等待（秒）<HelpTip text="客人常一次連傳好幾則；等這段時間沒有新訊息才回，避免一則一則各回一次。" /></template>
@@ -174,6 +187,9 @@ async function save() {
 .digest-time {
   width: 140px;
 }
+.idle-select {
+  width: 160px;
+}
 .spam-row {
   display: flex;
   align-items: center;
@@ -186,6 +202,9 @@ async function save() {
 @media (max-width: 768px) {
   .wrap {
     padding: 16px;
+  }
+  .idle-select {
+    width: 100%;
   }
   .spam-row .num {
     width: 150px; // 手機的數字框兩側有 ± 鈕（各 40px）

@@ -26,6 +26,9 @@ export const useInboxStore = defineStore('inbox', () => {
   const accountFilter = ref<number | null>(null) // null＝全部帳號
   const query = ref('')
   const pending = ref<Record<number, PendingMessage[]>>({}) // 每個對話各自一條送出佇列
+  // 背景擬好 AI 建議的通知（SSE suggestion.ready）：對話 id → 對應的顧客訊息 id＋流水號（同一則重複通知也能觸發 watch）
+  const suggestionReady = ref<Record<number, { forMessageId: number; seq: number }>>({})
+  let readySeq = 0
   const pumping = new Set<number>()
   let tmpSeq = 0
   let sse: ResilientSSE | null = null
@@ -203,6 +206,10 @@ export const useInboxStore = defineStore('inbox', () => {
           upsertConversation(ev.conversation)
           handoffHandlers.forEach((fn) => fn(ev))
         })
+        es.addEventListener('suggestion.ready', (e) => {
+          const ev = JSON.parse((e as MessageEvent).data) as { conversationId: number; forMessageId: number }
+          suggestionReady.value[ev.conversationId] = { forMessageId: ev.forMessageId, seq: ++readySeq }
+        })
         es.addEventListener('conversation.updated', (e) => {
           const c = JSON.parse((e as MessageEvent).data) as Conversation
           if (c.id === activeId.value && document.visibilityState === 'visible') c.unreadCount = 0
@@ -219,7 +226,7 @@ export const useInboxStore = defineStore('inbox', () => {
   }
 
   return {
-    conversations, messages, hasMore, pending, activeId, active, loading, connected, totalUnread, accountFilter,
+    conversations, messages, hasMore, pending, suggestionReady, activeId, active, loading, connected, totalUnread, accountFilter,
     fetchConversations, setAccountFilter, open, loadOlder, markRead, send, retrySend, discardPending, patch, applyRisk, connect, disconnect, onHandoff,
   }
 })

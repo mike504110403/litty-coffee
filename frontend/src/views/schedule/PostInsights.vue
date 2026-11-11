@@ -56,7 +56,7 @@ async function refresh() {
       >
         更新數據
       </el-button>
-      <span v-else class="when">限動數據僅 24 小時內可更新</span>
+      <span v-else-if="post.kind === 'story'" class="when">限動數據僅 24 小時內可更新</span>
     </div>
   </div>
 </template>

@@ -3,7 +3,7 @@ import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { Calendar, EditPen, ArrowRight } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
-import { interactions, kindLabels, postsApi, type Post } from '@/api/posts'
+import { interactions, kindLabels, postThumb, postsApi, type Post } from '@/api/posts'
 import { flagsApi } from '@/api/flags'
 import { intentLabels } from '@/api/automation'
 import { delta, formatCount, formatDuration, formatPercent } from '@/utils/format'
@@ -151,7 +151,8 @@ const rankedPosts = computed(() =>
     .slice(0, 10)
     .map((p) => ({
       id: p.id,
-      thumb: p.media[0]?.kind === 'image' ? p.media[0].url : '',
+      thumb: postThumb(p),
+      ig: p.source === 'ig',
       kind: kindLabels[p.kind],
       caption: p.caption || (p.kind === 'story' ? '限動' : '（無文案）'),
       date: shortDate(p.publishedAt),
@@ -365,7 +366,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
         <header>
           <h3>
             貼文成效
-            <HelpTip text="期間內已發佈的貼文，依互動數（按讚＋留言＋收藏＋分享；限動為回覆＋分享）排序，最多 10 篇。發佈後會自動更新數據，也可到「排程」按「更新數據」。" />
+            <HelpTip text="期間內已發佈的貼文（含從 IG 同步進來的，標「IG 發佈」），依互動數（按讚＋留言＋收藏＋分享；限動為回覆＋分享）排序，最多 10 篇。發佈後會自動更新數據，也可到「排程」按「更新數據」。" />
           </h3>
           <span v-if="pendingPosts" class="peak">{{ pendingPosts }} 篇尚無數據</span>
         </header>
@@ -377,7 +378,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
                 <span v-else class="ph">{{ row.kind }}</span>
                 <div class="pc-text">
                   <span class="pc-cap">{{ row.caption }}</span>
-                  <span class="pc-sub">{{ row.date }} · {{ row.kind }}</span>
+                  <span class="pc-sub">{{ row.date }} · {{ row.kind }}<em v-if="row.ig" class="ig-tag">IG 發佈</em></span>
                 </div>
               </div>
             </template>
@@ -592,6 +593,15 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
 .pc-sub {
   font-size: 12px;
   color: var(--lc-muted);
+}
+.ig-tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 11px;
+  background: var(--lc-tone-caramel-bg);
+  color: var(--lc-tone-caramel-fg);
 }
 .posts-empty {
   padding: 10px 0;
