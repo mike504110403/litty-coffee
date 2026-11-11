@@ -56,7 +56,7 @@ const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
 }
 .pager {
   margin-top: auto;
-  padding-top: 8px;
+  padding-top: 4px;
   justify-content: center;
 }
 .bar-list {
@@ -64,7 +64,7 @@ const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 li {
   display: grid;

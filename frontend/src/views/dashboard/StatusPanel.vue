@@ -133,119 +133,117 @@ const sysItems = computed<SysItem[]>(() => {
 
 <template>
   <section class="status lc-card" :class="{ loading: !status && !failed }" aria-label="系統狀態">
-    <header class="st-head">
-      <h3>
-        系統狀態
-        <span v-if="status" class="dot" :class="status.meta.status" :aria-label="statusLabel[status.meta.status]" />
-      </h3>
-      <span v-if="status" class="checked" :title="clock(status.checkedAt)">{{ ago(status.checkedAt) }}檢查</span>
+    <div class="st-lead">
+      <span class="st-title">系統狀態</span>
+      <span
+        v-if="status"
+        class="dot ok-dot"
+        :class="status.meta.status"
+        :title="`${statusLabel[status.meta.status]}・${ago(status.checkedAt)}檢查（${clock(status.checkedAt)}）`"
+        :aria-label="statusLabel[status.meta.status]"
+      />
       <span v-else-if="failed" class="checked bad">無法取得狀態</span>
-    </header>
+      <el-skeleton v-else :rows="0" animated class="sk"><template #template><el-skeleton-item variant="text" style="width: 120px" /></template></el-skeleton>
+    </div>
 
-    <div v-if="status" class="st-body">
-      <div v-if="status.accounts.length" class="acc-grid">
-        <div v-for="a in status.accounts" :key="a.id" class="acc" :class="[a.status, { off: !a.active }]">
-          <el-popover :trigger="trigger" placement="bottom-start" :width="290" :show-arrow="false" popper-class="status-pop">
-            <template #reference>
-              <button type="button" class="acc-top">
-                <span class="av">
-                  <AccountAvatar :account="accountFor(a)" :size="34" />
-                  <span class="dot ring" :class="a.status" :aria-label="statusLabel[a.status]" />
-                </span>
-                <span class="acc-text">
-                  <span class="acc-name">{{ accountName(a) }}</span>
-                  <span class="acc-sub">
-                    <span class="mini"><i class="dot sm" :class="a.connection.status" />連線</span>
-                    <span class="mini"><i class="dot sm" :class="a.webhook.status" />私訊</span>
-                    <span class="mini muted">{{ ago(a.lastWebhookAt) }}</span>
-                  </span>
-                </span>
-              </button>
-            </template>
-            <div class="pop">
-              <div class="pop-title">{{ accountName(a) }}</div>
-              <div class="pop-row"><span>狀態</span><b :class="a.status">{{ a.message }}</b></div>
-              <div class="pop-row">
-                <span>Meta 連線</span>
-                <b :class="a.connection.status">{{ a.connection.message }}</b>
-              </div>
-              <div class="pop-row"><span>私訊事件</span><b :class="a.webhook.status">{{ a.webhook.message }}</b></div>
-              <div class="pop-row"><span>最後收到</span><b>{{ clock(a.lastWebhookAt) }}</b></div>
-              <div v-if="a.posts.failed || a.posts.overdue" class="pop-row">
-                <span>貼文</span><b class="yellow">失敗 {{ a.posts.failed }} · 遲發 {{ a.posts.overdue }}</b>
-              </div>
-              <div class="pop-row"><span>檢查時間</span><b>{{ clock(a.checkedAt) }}</b></div>
-            </div>
-          </el-popover>
-          <div class="acc-switch">
-            <span>自動回覆</span>
-            <el-switch
-              :model-value="a.autoReplyEnabled"
-              size="small"
-              :loading="toggling[a.id]"
-              :disabled="!status.canToggleAutoReply || !a.active"
-              :aria-label="`${accountName(a)} 自動回覆`"
-              @change="(v: string | number | boolean) => toggle(a, v)"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div class="sys-grid">
-        <el-popover
-          v-for="it in sysItems"
-          :key="it.key"
-          :trigger="trigger"
-          placement="bottom-start"
-          :width="280"
-          :show-arrow="false"
-          popper-class="status-pop"
-        >
+    <template v-if="status">
+      <div v-for="a in status.accounts" :key="a.id" class="pill acc" :class="[a.status, { off: !a.active }]">
+        <el-popover :trigger="trigger" placement="bottom-start" :width="290" :show-arrow="false" popper-class="status-pop">
           <template #reference>
-            <button type="button" class="sys" :class="it.light.status">
-              <el-icon class="sys-icon" :size="18"><component :is="it.icon" /></el-icon>
-              <span class="sys-text">
-                <span class="sys-name">{{ it.label }}<i class="dot sm" :class="it.light.status" /></span>
-                <span class="sys-msg">{{ it.light.message }}</span>
+            <button type="button" class="pill-btn">
+              <span class="av">
+                <AccountAvatar :account="accountFor(a)" :size="24" />
+                <span class="dot ring" :class="a.status" :aria-label="statusLabel[a.status]" />
               </span>
+              <span class="acc-name">{{ accountName(a) }}</span>
+              <span class="mini"><i class="dot sm" :class="a.connection.status" />連線</span>
+              <span class="mini"><i class="dot sm" :class="a.webhook.status" />私訊</span>
+              <span class="mini muted">{{ ago(a.lastWebhookAt) }}</span>
+              <span v-if="a.status !== 'green'" class="warn-msg" :class="a.status">{{ a.message }}</span>
             </button>
           </template>
           <div class="pop">
-            <div class="pop-title">{{ it.label }}</div>
-            <div class="pop-row"><span>狀態</span><b :class="it.light.status">{{ it.light.message }}</b></div>
-            <div v-for="[k, v] in it.rows" :key="k" class="pop-row">
-              <span>{{ k }}</span><b>{{ v }}</b>
+            <div class="pop-title">{{ accountName(a) }}</div>
+            <div class="pop-row"><span>狀態</span><b :class="a.status">{{ a.message }}</b></div>
+            <div class="pop-row">
+              <span>Meta 連線</span>
+              <b :class="a.connection.status">{{ a.connection.message }}</b>
             </div>
+            <div class="pop-row"><span>私訊事件</span><b :class="a.webhook.status">{{ a.webhook.message }}</b></div>
+            <div class="pop-row"><span>最後收到</span><b>{{ clock(a.lastWebhookAt) }}</b></div>
+            <div class="pop-row"><span>自動回覆</span><b>{{ a.autoReplyEnabled ? '開啟' : '關閉' }}</b></div>
+            <div v-if="a.posts.failed || a.posts.overdue" class="pop-row">
+              <span>貼文</span><b class="yellow">失敗 {{ a.posts.failed }} · 遲發 {{ a.posts.overdue }}</b>
+            </div>
+            <div class="pop-row"><span>檢查時間</span><b>{{ clock(a.checkedAt) }}</b></div>
           </div>
         </el-popover>
+        <el-switch
+          class="acc-switch"
+          :model-value="a.autoReplyEnabled"
+          size="small"
+          :loading="toggling[a.id]"
+          :disabled="!status.canToggleAutoReply || !a.active"
+          :title="`${accountName(a)} 自動回覆`"
+          :aria-label="`${accountName(a)} 自動回覆`"
+          @change="(v: string | number | boolean) => toggle(a, v)"
+        />
       </div>
-    </div>
-    <el-skeleton v-else-if="!failed" :rows="2" animated />
+
+      <el-popover
+        v-for="it in sysItems"
+        :key="it.key"
+        :trigger="trigger"
+        placement="bottom-start"
+        :width="280"
+        :show-arrow="false"
+        popper-class="status-pop"
+      >
+        <template #reference>
+          <button type="button" class="pill pill-btn sys" :class="it.light.status">
+            <el-icon class="sys-icon" :size="15"><component :is="it.icon" /></el-icon>
+            <span class="sys-name">{{ it.label }}</span>
+            <i class="dot sm" :class="it.light.status" />
+            <span v-if="it.light.status !== 'green'" class="warn-msg" :class="it.light.status">{{ it.light.message }}</span>
+          </button>
+        </template>
+        <div class="pop">
+          <div class="pop-title">{{ it.label }}</div>
+          <div class="pop-row"><span>狀態</span><b :class="it.light.status">{{ it.light.message }}</b></div>
+          <div v-for="[k, v] in it.rows" :key="k" class="pop-row">
+            <span>{{ k }}</span><b>{{ v }}</b>
+          </div>
+        </div>
+      </el-popover>
+    </template>
   </section>
 </template>
 
 <style scoped lang="scss">
+// 細長狀態列：標題＋總燈、每個帳號與系統項目各一顆小膠囊，擠不下就換行
 .status {
-  padding: 14px 16px 16px;
-  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  min-height: 56px;
 }
-.st-head {
+.st-lead {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
-  h3 {
-    margin: 0;
-    font-size: 15px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+  gap: 6px;
+  margin-right: 2px;
+}
+.st-title {
+  font-size: 14px;
+  font-weight: 700;
 }
 .checked {
   font-size: 12px;
   color: var(--lc-muted);
+  white-space: nowrap;
   &.bad {
     color: var(--lc-fail-fg);
   }
@@ -277,26 +275,24 @@ const sysItems = computed<SysItem[]>(() => {
     position: absolute;
     right: -2px;
     bottom: -2px;
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     box-shadow: 0 0 0 2px var(--lc-surface);
   }
 }
 
-.acc-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.acc {
-  border: 1px solid var(--lc-border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
+.pill {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--lc-border);
+  border-radius: 999px;
+  &.yellow {
+    border-color: var(--lc-tone-amber-fg);
+    background: var(--lc-warn-bg);
+  }
   &.red {
     border-color: var(--lc-fail-fg);
     background: var(--lc-fail-bg);
@@ -305,42 +301,50 @@ const sysItems = computed<SysItem[]>(() => {
     opacity: 0.7;
   }
 }
-.acc-top {
-  display: flex;
+.acc {
+  padding: 3px 10px 3px 4px;
+}
+.pill-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
+  gap: 8px;
   min-width: 0;
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
+}
+.sys {
+  padding: 5px 12px;
+  border: 1px solid var(--lc-border);
+  &:hover {
+    background: var(--lc-bg-hover);
+  }
+  &.yellow {
+    border-color: var(--lc-tone-amber-fg);
+    background: var(--lc-warn-bg);
+  }
+  &.red {
+    border-color: var(--lc-fail-fg);
+    background: var(--lc-fail-bg);
+  }
 }
 .av {
   position: relative;
   display: inline-flex;
   flex: none;
 }
-.acc-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
 .acc-name {
   font-weight: 600;
+  font-size: 13px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.acc-sub {
-  display: flex;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--lc-text);
 }
 .mini {
   display: inline-flex;
@@ -350,67 +354,34 @@ const sysItems = computed<SysItem[]>(() => {
     color: var(--lc-muted);
   }
 }
-.acc-switch {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--lc-muted);
-  padding-top: 6px;
-  border-top: 1px dashed var(--lc-border);
-}
-
-.sys-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.sys {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--lc-border);
-  border-radius: 12px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+.warn-msg {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  &.yellow {
+    color: var(--lc-warn-fg);
+  }
   &.red {
-    border-color: var(--lc-fail-fg);
-    background: var(--lc-fail-bg);
+    color: var(--lc-fail-fg);
   }
-  &:hover {
-    background: var(--lc-bg-hover);
-  }
+}
+.acc-switch {
+  flex: none;
+  height: 20px;
 }
 .sys-icon {
   color: var(--lc-muted);
   flex: none;
 }
-.sys-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
 .sys-name {
   font-weight: 600;
-  font-size: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  .dot.sm {
-    margin: 0;
-  }
-}
-.sys-msg {
-  font-size: 12px;
-  color: var(--lc-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 13px;
   white-space: nowrap;
+}
+.sys .dot.sm {
+  margin: 0;
 }
 
 .pop {
@@ -446,11 +417,21 @@ const sysItems = computed<SysItem[]>(() => {
 }
 
 @media (max-width: 768px) {
-  .sys-grid {
-    grid-template-columns: 1fr;
+  .status {
+    padding: 8px 10px;
   }
-  .acc-grid {
-    grid-template-columns: 1fr;
+  .acc {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .acc .pill-btn {
+    flex: 1;
+  }
+  .sys {
+    flex: 1 1 0;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 6px;
   }
 }
 </style>

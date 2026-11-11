@@ -22,6 +22,9 @@ import { useAccountsStore } from '@/stores/accounts'
 const C_AUTO = 'var(--lc-chart-1)'
 const C_HUMAN = 'var(--lc-chart-2)'
 const C_SINGLE = 'var(--lc-chart-1)'
+// 圖表卡片固定高度內的繪圖高度與表格／清單每頁列數
+const CH = 176
+const PS = 6
 
 const auth = useAuthStore()
 const canAnalytics = computed(() => auth.can('analytics'))
@@ -188,9 +191,10 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
       <div class="controls">
         <AccountSelect v-if="accounts.multi" v-model="account" allow-all class="acc-filter" />
         <template v-if="canAnalytics">
-          <el-segmented v-model="days" :options="ranges.map((r) => ({ label: r.label, value: r.v }))" />
+          <el-segmented v-model="days" size="small" :options="ranges.map((r) => ({ label: r.label, value: r.v }))" />
           <el-segmented
             v-model="tableView"
+            size="small"
             :options="[
               { label: '圖表', value: false },
               { label: '表格', value: true },
@@ -205,19 +209,20 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     <div v-if="tiles.length || showCounts" class="tiles">
       <div v-for="t in tiles" :key="t.label" class="tile lc-card">
         <div class="t-label">{{ t.label }}</div>
-        <div class="t-value">{{ t.value }}</div>
-        <div class="t-foot">
-          <span v-if="t.d != null" class="t-delta" :class="(t.d >= 0) === t.upIsGood ? 'good' : 'bad'">
-            {{ t.d >= 0 ? '▲' : '▼' }} {{ Math.abs(Math.round(t.d * 100)) }}%
+        <div class="t-main">
+          <span class="t-value">{{ t.value }}</span>
+          <span v-if="t.d != null" class="t-delta" :class="(t.d >= 0) === t.upIsGood ? 'good' : 'bad'" :title="vsLabel">
+            {{ t.d >= 0 ? '▲' : '▼' }}{{ Math.abs(Math.round(t.d * 100)) }}%
           </span>
-          <span v-if="t.d != null" class="vs">{{ vsLabel }}</span>
         </div>
-        <div v-if="t.sub" class="t-sub">{{ t.sub }}</div>
+        <div class="t-sub" :title="t.sub">{{ t.sub || vsLabel }}</div>
       </div>
       <router-link v-if="canSchedule" :to="{ name: 'schedule' }" class="tile lc-card link-tile">
         <div class="t-label"><el-icon><Calendar /></el-icon>待發排程</div>
-        <div class="t-value">{{ upcoming == null ? '—' : upcoming }}</div>
-        <el-icon class="t-arrow"><ArrowRight /></el-icon>
+        <div class="t-main">
+          <span class="t-value">{{ upcoming == null ? '—' : upcoming }}</span>
+          <el-icon class="t-arrow"><ArrowRight /></el-icon>
+        </div>
       </router-link>
       <router-link
         v-if="canAutomation"
@@ -226,8 +231,10 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
         :class="{ hot: !!openReviews }"
       >
         <div class="t-label"><el-icon><EditPen /></el-icon>待改進問答</div>
-        <div class="t-value">{{ openReviews == null ? '—' : openReviews }}</div>
-        <el-icon class="t-arrow"><ArrowRight /></el-icon>
+        <div class="t-main">
+          <span class="t-value">{{ openReviews == null ? '—' : openReviews }}</span>
+          <el-icon class="t-arrow"><ArrowRight /></el-icon>
+        </div>
       </router-link>
     </div>
 
@@ -237,9 +244,9 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     </router-link>
 
     <template v-if="canAnalytics">
-      <div class="grid">
-        <DigestCard :filter="account" class="card-digest" />
+      <DigestCard :filter="account" />
 
+      <div class="grid">
         <template v-if="data">
           <section class="card lc-card">
             <header><h3>每日訊息</h3></header>
@@ -248,6 +255,8 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
               :categories="dailyCats"
               :short-labels="dailyShort"
               :series="[{ key: 'in', label: '顧客訊息', color: C_SINGLE, values: data.daily.map((d) => d.inbound) }]"
+              :height="CH"
+              :page-size="PS"
               :show-table="tableView"
               description="每日顧客訊息數長條圖"
             />
@@ -265,8 +274,9 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
                 { key: 'auto', label: '自動回覆（規則＋AI）', color: C_AUTO, values: data.daily.map((d) => d.auto) },
                 { key: 'human', label: '真人', color: C_HUMAN, values: data.daily.map((d) => d.human) },
               ]"
+              :height="CH"
               :show-table="tableView"
-              :page-size="6"
+              :page-size="PS - 2"
               description="每日店家回覆數堆疊長條圖，分自動與真人"
             />
           </section>
@@ -275,7 +285,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
             <header>
               <h3>顧客在問什麼<HelpTip text="AI 回覆時判斷的訊息意圖；只有 AI 處理過的訊息才有分類。" /></h3>
             </header>
-            <BarList :key="`b${days}`" :items="intentItems" :color="C_SINGLE" empty-text="還沒有意圖資料" />
+            <BarList :key="`b${days}`" :items="intentItems" :color="C_SINGLE" :page-size="PS" empty-text="還沒有意圖資料" />
           </section>
 
           <section class="card lc-card">
@@ -288,7 +298,8 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
               :categories="data.hours.map((_, h) => `${h}:00–${h + 1}:00`)"
               :short-labels="data.hours.map((_, h) => `${h}`)"
               :series="[{ key: 'h', label: '顧客訊息', color: C_SINGLE, values: data.hours }]"
-              :height="150"
+              :height="CH"
+              :page-size="PS"
               :show-table="tableView"
               description="一天 24 小時的顧客訊息分布長條圖"
             />
@@ -302,6 +313,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
               :key="`r${days}`"
               :items="data.topRules.map((r) => ({ label: r.name, value: r.hitCount }))"
               :color="C_SINGLE"
+              :page-size="PS"
               empty-text="還沒有規則被命中"
             />
           </section>
@@ -316,7 +328,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
           </h3>
           <span v-if="pendingPosts" class="peak">{{ pendingPosts }} 篇尚無數據</span>
         </header>
-        <el-table v-if="rankedPosts.length" :data="rankedPosts" size="small" class="post-table">
+        <el-table v-if="rankedPosts.length" :data="rankedPosts" size="small" class="post-table" :max-height="240">
           <el-table-column label="貼文" min-width="220">
             <template #default="{ row }">
               <div class="pc">
@@ -348,15 +360,16 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   .lc-page-title {
     margin: 0;
+    font-size: 18px;
   }
 }
 .acc-filter {
-  width: 170px;
+  width: 160px;
 }
 .controls {
   display: flex;
@@ -364,38 +377,46 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   flex-wrap: wrap;
 }
 
+// KPI：一排六格，數字＋標籤＋一行小字，緊湊不留白
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 14px;
-  margin-bottom: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
 }
 .tile {
-  padding: 16px 18px;
+  padding: 8px 12px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
 }
 .t-label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--lc-muted);
   display: flex;
   align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.t-main {
+  display: flex;
+  align-items: baseline;
   gap: 6px;
+  min-width: 0;
 }
 .t-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
-  margin: 4px 0 2px;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
-}
-.t-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  min-height: 18px;
+  white-space: nowrap;
 }
 .t-delta {
+  font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
   &.good {
     color: var(--lc-delta-good);
   }
@@ -403,16 +424,14 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     color: var(--lc-delta-bad);
   }
 }
-.vs {
-  color: var(--lc-muted);
-}
 .t-sub {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--lc-muted);
-  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .link-tile {
-  position: relative;
   color: inherit;
   text-decoration: none;
   transition: background 0.12s;
@@ -422,11 +441,12 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   &.hot .t-value {
     color: var(--lc-tone-rose-fg);
   }
+  .t-main {
+    justify-content: space-between;
+    align-items: center;
+  }
 }
 .t-arrow {
-  position: absolute;
-  right: 14px;
-  top: 16px;
   color: var(--lc-muted);
 }
 
@@ -434,8 +454,8 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 14px;
-  margin-bottom: 14px;
+  padding: 4px 12px;
+  margin-bottom: 12px;
   border-radius: 12px;
   background: var(--lc-warn-bg);
   color: var(--lc-warn-fg);
@@ -443,20 +463,24 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   text-decoration: none;
 }
 
+// 圖表：寬螢幕第一排三張（各占 2/6）、第二排兩張（各占 3/6）
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-.card-digest {
-  grid-column: 1 / -1;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  > .card {
+    grid-column: span 2;
+    &:nth-child(n + 4) {
+      grid-column: span 3;
+    }
+  }
 }
 .card {
-  padding: 16px 18px 18px;
+  padding: 10px 12px 12px;
   min-width: 0;
   // 圖表卡片固定高度：表格／清單太多列時在卡片內分頁，不撐高卡片（貼文成效表格另計）
   &:not(.posts-card) {
-    height: 360px;
+    height: 250px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -470,11 +494,11 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
   }
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
     display: inline-flex;
     align-items: center;
   }
@@ -485,7 +509,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   white-space: nowrap;
 }
 .posts-card {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .post-table {
   width: 100%;
@@ -497,8 +521,8 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   min-width: 0;
   img,
   .ph {
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
     border-radius: 6px;
     object-fit: cover;
     flex-shrink: 0;
@@ -514,6 +538,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   display: flex;
   flex-direction: column;
   min-width: 0;
+  line-height: 1.3;
 }
 .pc-cap {
   overflow: hidden;
@@ -525,14 +550,23 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
   color: var(--lc-muted);
 }
 .posts-empty {
-  padding: 18px 0;
+  padding: 10px 0;
   text-align: center;
   font-size: 13px;
   color: var(--lc-muted);
 }
+@media (max-width: 1279px) {
+  .grid > .card,
+  .grid > .card:nth-child(n + 4) {
+    grid-column: span 3;
+  }
+  .grid > .card:last-child:nth-child(odd) {
+    grid-column: span 6;
+  }
+}
 @media (max-width: 1100px) {
-  .grid {
-    grid-template-columns: 1fr;
+  .tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 768px) {
@@ -547,14 +581,17 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     width: 100%;
   }
   .tiles {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
-  }
-  .tile {
-    padding: 12px 14px;
-  }
-  .t-value {
-    font-size: 22px;
+    > .card,
+    > .card:nth-child(n + 4),
+    > .card:last-child:nth-child(odd) {
+      grid-column: auto;
+    }
   }
 }
 </style>

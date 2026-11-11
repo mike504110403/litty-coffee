@@ -152,7 +152,7 @@ const multi = computed(() => props.series.length > 1)
   gap: 14px;
   font-size: 12px;
   color: var(--lc-muted);
-  margin-bottom: 10px;
+  margin-bottom: 4px;
   .key {
     display: inline-flex;
     align-items: center;
@@ -169,7 +169,7 @@ const multi = computed(() => props.series.length > 1)
   display: grid;
   grid-template-columns: 32px 1fr;
   grid-template-rows: 1fr 20px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 .y-axis {
   position: relative;
@@ -296,7 +296,7 @@ const multi = computed(() => props.series.length > 1)
 .pager {
   flex: none;
   margin-top: auto;
-  padding-top: 8px;
+  padding-top: 4px;
   justify-content: center;
 }
 .data-table {
@@ -305,7 +305,7 @@ const multi = computed(() => props.series.length > 1)
   font-size: 13px;
   th,
   td {
-    padding: 6px 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--lc-border);
     text-align: right;
     font-variant-numeric: tabular-nums;

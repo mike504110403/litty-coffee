@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, ArrowRight } from '@element-plus/icons-vue'
@@ -7,6 +7,7 @@ import { digestApi, type Digest } from '@/api/system'
 import { intentLabels } from '@/api/automation'
 import { useAuthStore } from '@/stores/auth'
 import { useAccountsStore } from '@/stores/accounts'
+import { useMediaQuery } from '@/composables/useMediaQuery'
 import { useSystemStore } from '@/stores/system'
 import { delta, formatCount, formatPercent } from '@/utils/format'
 import AccountSelect from '@/components/AccountSelect.vue'
@@ -16,7 +17,9 @@ import HelpTip from '@/components/HelpTip.vue'
 // filter＝總覽的帳號篩選；「全部帳號」時卡片自己選一個帳號（摘要是每帳號一份）
 const props = defineProps<{ filter: number | null }>()
 
-const PAGE = 4
+// 待處理預設只列前幾則，其餘展開看；手機只列 3 則，避免卡片太高
+const isNarrow = useMediaQuery('(max-width: 768px)')
+const SHOW = computed(() => (isNarrow.value ? 3 : 5))
 const auth = useAuthStore()
 const router = useRouter()
 const accounts = useAccountsStore()
@@ -26,14 +29,18 @@ const acc = ref<number | null>(props.filter)
 const digest = ref<Digest | null>(null)
 const loading = ref(false)
 const generating = ref(false)
-const page = ref(1)
+const showAll = ref(false)
+const sumOpen = ref(false)
+const sumClamped = ref(false)
+const sumEl = ref<HTMLElement | null>(null)
 
 async function load() {
   if (acc.value == null) return
   loading.value = true
   try {
     digest.value = await digestApi.latest(acc.value)
-    page.value = 1
+    showAll.value = false
+    sumOpen.value = false
   } catch {
     digest.value = null
   } finally {
@@ -46,7 +53,7 @@ async function regenerate() {
   generating.value = true
   try {
     digest.value = await digestApi.generate(acc.value)
-    page.value = 1
+    showAll.value = false
     ElMessage.success('摘要已更新')
   } finally {
     generating.value = false
@@ -91,61 +98,91 @@ const stats = computed(() => {
 })
 const intents = computed(() => c.value?.intents.slice(0, 4).map((i) => `${intentLabels[i.key] ?? i.key} ${i.count}`) ?? [])
 const todo = computed(() => c.value?.todo ?? [])
-const pageTodo = computed(() => todo.value.slice((page.value - 1) * PAGE, page.value * PAGE))
+const shownTodo = computed(() => (showAll.value ? todo.value : todo.value.slice(0, SHOW.value)))
 const canOpen = computed(() => auth.can('inbox'))
 const open = (id: number) => canOpen.value && router.push({ name: 'inbox', params: { id } })
+// AI 總結預設 3 行；實際被截斷才出現「展開」
+function measure() {
+  const el = sumEl.value
+  sumClamped.value = !!el && !sumOpen.value && el.scrollHeight > el.clientHeight + 1
+}
+watch(
+  () => c.value?.summary,
+  () => {
+    sumOpen.value = false
+    void nextTick(measure)
+  },
+  { flush: 'post' },
+)
 const urgent = (reasons: string[]) => reasons.some((r) => r.startsWith('未回覆') || r === '轉真人未回' || r === '客訴')
 </script>
 
 <template>
-  <section v-loading="loading" class="digest lc-card">
+  <section v-loading="loading && !c" class="digest lc-card" :class="{ slim: !c }">
     <header>
       <div class="title">
         <h3>每日摘要</h3>
         <span v-if="dateLabel" class="date">{{ dateLabel }}</span>
+        <span v-else-if="!loading" class="date">尚未產生</span>
         <HelpTip text="每天在「自動回覆 → AI 設定」的時間整理前一天的私訊；待處理依未回覆、轉真人、客訴／訂位、問題顧客、待改進排序。" />
       </div>
       <div class="actions">
         <AccountSelect v-if="filter == null && accounts.multi" v-model="acc" size="small" class="acc" />
-        <el-button :icon="Refresh" size="small" :loading="generating" :disabled="acc == null" @click="regenerate">
-          重新產生
+        <el-button
+          :icon="c ? Refresh : undefined"
+          size="small"
+          :type="c ? 'default' : 'primary'"
+          :loading="generating"
+          :disabled="acc == null"
+          @click="regenerate"
+        >
+          {{ c ? '重新產生' : '產生' }}
         </el-button>
       </div>
     </header>
 
     <div v-if="c" class="body">
-      <p v-if="c.summaryStatus === 'ok' && c.summary" class="summary">{{ c.summary }}</p>
-      <el-tooltip v-else-if="c.summaryStatus === 'failed'" :content="c.summaryError || 'AI 呼叫失敗'" placement="top">
-        <el-tag type="warning" size="small" class="sum-fail">AI 總結失敗</el-tag>
-      </el-tooltip>
+      <div class="left">
+        <div v-if="c.summaryStatus === 'ok' && c.summary" class="sum-wrap">
+          <p ref="sumEl" class="summary" :class="{ open: sumOpen }">{{ c.summary }}</p>
+          <button v-if="sumClamped || sumOpen" type="button" class="more" @click="((sumOpen = !sumOpen), nextTick(measure))">
+            {{ sumOpen ? '收合' : '展開' }}
+          </button>
+        </div>
+        <el-tooltip v-else-if="c.summaryStatus === 'failed'" :content="c.summaryError || 'AI 呼叫失敗'" placement="top">
+          <el-tag type="warning" size="small" class="sum-fail">AI 總結失敗</el-tag>
+        </el-tooltip>
 
-      <div class="stats">
-        <div v-for="s in stats" :key="s.label" class="stat">
-          <span class="s-label">{{ s.label }}</span>
-          <span class="s-value">{{ s.value }}</span>
-          <span v-if="s.d != null" class="s-delta" :class="s.d >= 0 ? 'up' : 'down'">
-            {{ s.d >= 0 ? '▲' : '▼' }}{{ Math.abs(Math.round(s.d * 100)) }}%
-          </span>
+        <div class="stats">
+          <div v-for="s in stats" :key="s.label" class="stat">
+            <span class="s-label">{{ s.label }}</span>
+            <span class="s-line">
+              <span class="s-value">{{ s.value }}</span>
+              <span v-if="s.d != null" class="s-delta" :class="s.d >= 0 ? 'up' : 'down'">
+                {{ s.d >= 0 ? '▲' : '▼' }}{{ Math.abs(Math.round(s.d * 100)) }}%
+              </span>
+            </span>
+          </div>
+        </div>
+        <div v-if="intents.length" class="intents">
+          <el-tag v-for="i in intents" :key="i" size="small" type="info" effect="plain" round>{{ i }}</el-tag>
         </div>
       </div>
-      <div v-if="intents.length" class="intents">
-        <el-tag v-for="i in intents" :key="i" size="small" type="info" effect="plain" round>{{ i }}</el-tag>
-      </div>
 
-      <div class="todo-head">
-        待處理
-        <b>{{ c.todoTotal }}</b>
-      </div>
-      <ul v-if="todo.length" class="todo">
-        <li
-          v-for="t in pageTodo"
-          :key="t.conversationId"
-          :class="{ link: canOpen }"
-          :tabindex="canOpen ? 0 : -1"
-          @click="open(t.conversationId)"
-          @keydown.enter="open(t.conversationId)"
-        >
-          <div class="t-main">
+      <div class="right">
+        <div class="todo-head">
+          待處理
+          <b>{{ c.todoTotal }}</b>
+        </div>
+        <ul v-if="todo.length" class="todo" :class="{ scroll: showAll }">
+          <li
+            v-for="t in shownTodo"
+            :key="t.conversationId"
+            :class="{ link: canOpen }"
+            :tabindex="canOpen ? 0 : -1"
+            @click="open(t.conversationId)"
+            @keydown.enter="open(t.conversationId)"
+          >
             <span class="t-who">{{ t.contact }}</span>
             <span class="t-tags">
               <el-tag
@@ -160,34 +197,30 @@ const urgent = (reasons: string[]) => reasons.some((r) => r.startsWith('未回�
               </el-tag>
             </span>
             <span v-if="t.lastText" class="t-text">{{ t.lastText }}</span>
-          </div>
-          <el-icon v-if="canOpen" class="t-go"><ArrowRight /></el-icon>
-        </li>
-      </ul>
-      <div v-else class="empty">沒有待處理的對話</div>
-      <el-pagination
-        v-if="todo.length > PAGE"
-        v-model:current-page="page"
-        :page-size="PAGE"
-        :total="todo.length"
-        layout="prev, pager, next"
-        size="small"
-        class="pager"
-      />
-    </div>
-    <div v-else-if="!loading" class="empty-state">
-      <span>還沒有摘要</span>
-      <el-button type="primary" size="small" :loading="generating" :disabled="acc == null" @click="regenerate">產生昨天的摘要</el-button>
+            <el-icon v-if="canOpen" class="t-go"><ArrowRight /></el-icon>
+          </li>
+        </ul>
+        <div v-else class="empty">沒有待處理的對話</div>
+        <button v-if="todo.length > SHOW" type="button" class="more" @click="showAll = !showAll">
+          {{ showAll ? '收合' : `展開其餘 ${todo.length - SHOW} 則` }}
+        </button>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped lang="scss">
 .digest {
-  padding: 16px 18px 14px;
-  display: flex;
-  flex-direction: column;
+  padding: 10px 12px;
+  margin-bottom: 12px;
   min-width: 0;
+  // 沒有摘要時縮成一行
+  &.slim {
+    padding: 6px 12px;
+    header {
+      margin: 0;
+    }
+  }
 }
 header {
   display: flex;
@@ -195,7 +228,7 @@ header {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .title {
   display: flex;
@@ -203,11 +236,11 @@ header {
   gap: 8px;
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
   }
 }
 .date {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--lc-muted);
 }
 .actions {
@@ -215,30 +248,67 @@ header {
   gap: 8px;
   align-items: center;
   .acc {
-    width: 160px;
+    width: 150px;
   }
 }
 .body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.left,
+.right {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
+  gap: 8px;
+  min-width: 0;
+}
+.sum-wrap {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--lc-bg-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .summary {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.7;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--lc-bg-soft);
+  font-size: 13px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  &.open {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+}
+.more {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--el-color-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  align-self: flex-start;
+  &:hover {
+    text-decoration: underline;
+  }
 }
 .sum-fail {
   align-self: flex-start;
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 .stat {
@@ -249,14 +319,23 @@ header {
 .s-label {
   font-size: 12px;
   color: var(--lc-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.s-line {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 .s-value {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 .s-delta {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   &.up {
     color: var(--lc-delta-good);
@@ -268,7 +347,7 @@ header {
 .intents {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 .todo-head {
   font-size: 13px;
@@ -283,13 +362,18 @@ header {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 4px;
+  &.scroll {
+    max-height: 240px;
+    overflow-y: auto;
+  }
   li {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
-    border-radius: 10px;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 8px;
     border: 1px solid var(--lc-border);
     &.link {
       cursor: pointer;
@@ -301,25 +385,19 @@ header {
     }
   }
 }
-.t-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-}
 .t-who {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 .t-tags {
   display: inline-flex;
-  flex-wrap: wrap;
   gap: 4px;
+  flex: none;
 }
 .t-text {
-  flex-basis: 100%;
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--lc-muted);
   overflow: hidden;
@@ -329,29 +407,30 @@ header {
 .t-go {
   color: var(--lc-muted);
   flex: none;
-}
-.pager {
-  justify-content: center;
+  margin-left: auto;
 }
 .empty {
   font-size: 13px;
   color: var(--lc-muted);
-  padding: 8px 0;
+  padding: 2px 0;
 }
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 24px 0;
-  color: var(--lc-muted);
-  font-size: 13px;
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 @media (max-width: 768px) {
+  .digest {
+    padding: 8px 10px;
+  }
   .stats {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .t-tags {
+    flex-wrap: wrap;
+  }
+  .t-text {
+    display: none;
   }
 }
 </style>
