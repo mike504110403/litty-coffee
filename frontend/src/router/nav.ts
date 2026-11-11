@@ -18,7 +18,7 @@ export const navItems: NavItem[] = [
   { path: 'inbox/:id?', name: 'inbox', title: '收件匣', icon: markRaw(ChatDotRound), component: () => import('@/views/inbox/InboxView.vue'), mobile: true, perm: 'inbox' },
   { path: 'automation', name: 'automation', title: '自動回覆', icon: markRaw(MagicStick), component: () => import('@/views/automation/AutomationView.vue'), mobile: true, perm: 'automation' },
   { path: 'schedule', name: 'schedule', title: '排程', icon: markRaw(Calendar), component: () => import('@/views/schedule/ScheduleView.vue'), mobile: true, perm: 'schedule' },
-  { path: 'contacts', name: 'contacts', title: '顧客', icon: markRaw(User), component: () => import('@/views/ContactsView.vue'), mobile: false, perm: 'contacts' },
+  { path: 'contacts', name: 'contacts', title: '顧客', icon: markRaw(User), component: () => import('@/views/ContactsView.vue'), mobile: true, perm: 'contacts' },
   { path: 'settings', name: 'settings', title: '設定', icon: markRaw(Setting), component: () => import('@/views/SettingsView.vue'), mobile: false, perm: ['ig_accounts', 'credentials'] },
   { path: 'admins', name: 'admins', title: '管理員', icon: markRaw(Avatar), component: () => import('@/views/admins/AdminsView.vue'), mobile: false, perm: 'admins' },
 ]
