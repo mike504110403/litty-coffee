@@ -2,8 +2,18 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore, type Perm } from '@/stores/auth'
 import { navItems } from './nav'
 
+// 每個頁面（路由名）各記自己的捲動位置：切 tab 回來時回到上次的位置，而不是最上面
+const scrollPos = new Map<string, number>()
+
 const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, from, saved) {
+    if (saved) return saved // 瀏覽器上一頁／下一頁
+    if (to.name === from.name) return false // 同頁換參數（例如切分頁、選對話）不動
+    const top = scrollPos.get(String(to.name)) ?? 0
+    // 等頁面（lazy 載入、KeepAlive 還原）畫出來再捲
+    return new Promise((resolve) => requestAnimationFrame(() => resolve({ top })))
+  },
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
     { path: '/setup', name: 'setup', component: () => import('@/views/SetupView.vue'), meta: { setup: true } },
@@ -20,7 +30,8 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
+  if (from.name) scrollPos.set(String(from.name), window.scrollY)
   const auth = useAuthStore()
   if (!auth.checked) await auth.fetchMe()
   if (to.meta.public) return auth.user && to.name === 'login' ? { name: 'dashboard' } : true

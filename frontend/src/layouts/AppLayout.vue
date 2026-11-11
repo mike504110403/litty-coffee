@@ -114,6 +114,8 @@ onBeforeUnmount(() => {
 
 const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 
+// 保留狀態的頁面（元件名＝SFC 檔名）；設定頁要在掛載時處理 OAuth 回呼參數，不保留
+const KEEP_ALIVE = ['DashboardView', 'InboxView', 'AutomationView', 'ScheduleView', 'ContactsView']
 const visibleItems = computed(() => navItems.filter((n) => auth.canAny(n.perm)))
 const mobileItems = computed(() => visibleItems.value.filter((n) => n.mobile))
 // 手機沒放進底部 tab bar 的項目（設定、管理員），從頂欄選單進入
@@ -157,7 +159,12 @@ const title = computed(() => (route.meta.title as string | undefined) ?? '')
     </header>
 
     <main class="content">
-      <RouterView />
+      <!-- 主要分頁保留狀態：切 tab 再回來不重載、捲動位置由 router 的 scrollBehavior 還原 -->
+      <RouterView v-slot="{ Component, route: r }">
+        <KeepAlive :include="KEEP_ALIVE">
+          <component :is="Component" :key="String(r.name)" />
+        </KeepAlive>
+      </RouterView>
     </main>
 
     <!-- 手機底部 tab bar -->

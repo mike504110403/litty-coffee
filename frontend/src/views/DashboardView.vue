@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { Calendar, EditPen, ArrowRight } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { crmApi, type Summary } from '@/api/crm'
@@ -88,6 +88,43 @@ async function loadPosts() {
     postsLoading.value = false
   }
 }
+
+// 手機版分頁（桌機全部同時顯示）：概況／圖表／貼文，記在這個瀏覽器
+const MTAB_KEY = 'lc-dash-mtab'
+const mobileTab = ref<'overview' | 'charts' | 'posts'>(
+  (() => {
+    try {
+      const v = localStorage.getItem(MTAB_KEY)
+      return v === 'charts' || v === 'posts' ? v : 'overview'
+    } catch {
+      return 'overview'
+    }
+  })(),
+)
+watch(mobileTab, (v) => {
+  try {
+    localStorage.setItem(MTAB_KEY, v)
+  } catch {
+    // 寫不進去只在這次有效
+  }
+})
+const mobileTabs = computed(() => [
+  { label: '概況', value: 'overview' },
+  ...(canAnalytics.value ? [{ label: '圖表', value: 'charts' }] : []),
+  ...(showPosts.value ? [{ label: '貼文', value: 'posts' }] : []),
+])
+
+// KeepAlive 切回來時（第一次掛載以外）安靜地更新數字，不重設捲動與分頁
+let firstActivate = true
+onActivated(() => {
+  if (firstActivate) {
+    firstActivate = false
+    return
+  }
+  void loadSummary()
+  void loadCounts()
+  void loadPosts()
+})
 
 onMounted(() => {
   void accounts.ensure()
@@ -185,7 +222,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
 </script>
 
 <template>
-  <div v-loading="loading && !data">
+  <div v-loading="loading && !data" class="dash" :data-mtab="mobileTab">
     <div class="head">
       <h1 class="lc-page-title">{{ greeting }}，{{ auth.user?.displayName || auth.user?.username }}</h1>
       <div class="controls">
@@ -204,6 +241,9 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
       </div>
     </div>
 
+    <el-segmented v-if="mobileTabs.length > 1" v-model="mobileTab" :options="mobileTabs" block class="m-tabs" />
+
+    <div class="m-sec m-overview">
     <StatusPanel />
 
     <div v-if="tiles.length || showCounts" class="tiles">
@@ -243,10 +283,11 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
       <el-icon><ArrowRight /></el-icon>
     </router-link>
 
-    <template v-if="canAnalytics">
-      <DigestCard :filter="account" />
+    <DigestCard v-if="canAnalytics" :filter="account" />
+    </div>
 
-      <div class="grid">
+    <template v-if="canAnalytics">
+      <div class="grid m-sec m-charts">
         <template v-if="data">
           <section class="card lc-card">
             <header><h3>每日訊息</h3></header>
@@ -320,7 +361,7 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
         </template>
       </div>
 
-      <section v-if="showPosts" v-loading="postsLoading" class="card lc-card posts-card">
+      <section v-if="showPosts" v-loading="postsLoading" class="card lc-card posts-card m-sec m-posts">
         <header>
           <h3>
             貼文成效
@@ -356,6 +397,9 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
 </template>
 
 <style scoped lang="scss">
+.m-tabs {
+  display: none;
+}
 .head {
   display: flex;
   justify-content: space-between;
@@ -584,13 +628,38 @@ const showCounts = computed(() => canSchedule.value || canAutomation.value)
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
+  // 手機：分頁切換，同時只顯示一區
+  .m-tabs {
+    display: flex;
+    position: sticky;
+    top: calc(56px + env(safe-area-inset-top) + 4px);
+    z-index: 5;
+    margin-bottom: 10px;
+  }
+  .dash:not([data-mtab='overview']) .m-overview,
+  .dash:not([data-mtab='charts']) .m-charts,
+  .dash:not([data-mtab='posts']) .m-posts {
+    display: none;
+  }
+  // 圖表：左右滑一張一張看
   .grid {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
     gap: 10px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    margin: 0 -16px;
+    padding: 0 16px 6px;
+    scrollbar-width: none;
+    &::-webkit-scrollbar {
+      display: none;
+    }
     > .card,
     > .card:nth-child(n + 4),
     > .card:last-child:nth-child(odd) {
-      grid-column: auto;
+      flex: 0 0 88%;
+      scroll-snap-align: center;
+      height: 300px;
     }
   }
 }
