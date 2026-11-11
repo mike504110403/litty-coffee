@@ -25,7 +25,7 @@ var (
 	ErrNotConnected  = errors.New("這個 IG 帳號尚未連結（到「設定」連結）")
 	ErrInactive      = errors.New("這個 IG 帳號已停用（到「設定」啟用）")
 	ErrExpired       = errors.New("IG 授權已過期，請到「設定」重新連結")
-	ErrNoAccounts    = errors.New("這次授權沒有指派任何 IG 專業帳號：請在授權畫面勾選要連結的帳號")
+	ErrNoAccounts    = errors.New("這個授權還沒有指派任何 IG 專業帳號：到 Meta 商家設定 →「系統工作人員」把 IG 帳號指派給它（完整控制），再回設定頁按「同步帳號」")
 	ErrNotConfigured = errors.New("尚未設定 Meta App ID／App Secret／配置 ID（到「設定 → 憑證」填寫，或設 IG_APP_ID／IG_APP_SECRET／IG_CONFIG_ID）")
 )
 
@@ -227,9 +227,6 @@ func (s *Service) Connect(ctx context.Context, code string) (Connection, []Accou
 	if err != nil {
 		return Connection{}, nil, fmt.Errorf("讀取 IG 帳號清單失敗：%w", err)
 	}
-	if len(list) == 0 {
-		return Connection{}, nil, ErrNoAccounts
-	}
 	if s.Box == nil {
 		return Connection{}, nil, errors.New("account: 未設定加密金鑰")
 	}
@@ -245,6 +242,17 @@ ON CONFLICT (client_business_id, system_user_id) DO UPDATE SET config_id = EXCLU
   access_token = EXCLUDED.access_token, token_expires = EXCLUDED.token_expires, last_error = '', connected_at = EXCLUDED.connected_at
 RETURNING id`, biz.ClientBusinessID, biz.SystemUserID, s.OAuth.ConfigID(), enc, tok.ExpiresAt, s.now()).Scan(&connID); err != nil {
 		return Connection{}, nil, err
+	}
+	// 授權成功但還沒指派帳號：保留連線（之後在 Meta 補指派、按「同步帳號」即可），不動既有帳號
+	if len(list) == 0 {
+		if _, err := s.DB.Exec(ctx, `UPDATE ig_connections SET last_error = $2 WHERE id = $1`, connID, ErrNoAccounts.Error()); err != nil {
+			return Connection{}, nil, err
+		}
+		c, err := s.Connection(ctx, connID)
+		if err != nil {
+			return Connection{}, nil, err
+		}
+		return c, nil, ErrNoAccounts
 	}
 	accs, err := s.syncAccounts(ctx, connID, tok.AccessToken, list)
 	if err != nil {

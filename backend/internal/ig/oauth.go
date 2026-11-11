@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -147,6 +148,7 @@ func (c *OAuthClient) Business(ctx context.Context, token string) (Business, err
 	if err := c.get(ctx, c.APIBase+"/me?fields=id,client_business_id", token, &b); err != nil {
 		return b, err
 	}
+	log.Printf("ig oauth debug: /me → system_user=%s business=%s", b.SystemUserID, b.ClientBusinessID)
 	if b.SystemUserID == "" {
 		return b, errors.New("meta /me 沒有 id")
 	}
@@ -174,7 +176,13 @@ func (c *OAuthClient) Accounts(ctx context.Context, token string) ([]AccountInfo
 				Next string `json:"next"`
 			} `json:"paging"`
 		}
-		if err := c.get(ctx, c.APIBase+"/me/assigned_instagram_accounts?"+q.Encode(), token, &res); err != nil {
+		raw, err := c.getRaw(ctx, c.APIBase+"/me/assigned_instagram_accounts?"+q.Encode(), token)
+		if err != nil {
+			log.Printf("ig oauth debug: assigned_instagram_accounts error: %v", err)
+			return nil, err
+		}
+		log.Printf("ig oauth debug: assigned_instagram_accounts page %d → %s", page, raw) // 暫時除錯：不含 token
+		if err := json.Unmarshal(raw, &res); err != nil {
 			return nil, err
 		}
 		for _, a := range res.Data {
@@ -210,6 +218,17 @@ func (c *OAuthClient) Subscribe(ctx context.Context, token, igUserID string) err
 		return errors.New("meta 訂閱 webhook 回傳 success=false")
 	}
 	return nil
+}
+
+func (c *OAuthClient) getRaw(ctx context.Context, u, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return c.send(req)
 }
 
 func (c *OAuthClient) get(ctx context.Context, u, token string, out any) error {

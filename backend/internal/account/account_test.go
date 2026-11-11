@@ -258,8 +258,12 @@ func TestConnectErrorsAndPartialSubscribe(t *testing.T) {
 	if _, _, err := s.Connect(ctx, "good-code"); !errors.Is(err, ErrNoAccounts) {
 		t.Fatalf("no accounts: %v", err)
 	}
-	if count(t, s.DB, `SELECT count(*) FROM ig_connections`) != 0 {
-		t.Fatal("沒帳號時不應留下連線")
+	// 沒指派帳號：保留連線並記錯誤，之後在 Meta 補指派、按「同步帳號」即可
+	if count(t, s.DB, `SELECT count(*) FROM ig_connections WHERE last_error LIKE '%系統工作人員%'`) != 1 {
+		t.Fatal("沒帳號時應保留連線並記錯誤")
+	}
+	if count(t, s.DB, `SELECT count(*) FROM ig_accounts`) != 0 {
+		t.Fatal("沒帳號時不應新增帳號")
 	}
 	m.pages = [][]map[string]string{{{"id": "1784001", "username": "a"}, {"id": "1784002", "username": "b"}}}
 	m.failSub["1784002"] = true
