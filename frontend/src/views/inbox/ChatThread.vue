@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Promotion, Check, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
-import { contactLabel, inboxApi, riskSourceLabels, throttleMinutes, type Conversation, type Message, type Suggestion } from '@/api/inbox'
+import { contactLabel, inboxApi, riskSourceLabels, throttleMinutes, type Conversation, type Message, type Suggestion, type SuggestOption } from '@/api/inbox'
 import { flagsApi, type RiskResult } from '@/api/flags'
 import ContactAvatar from '@/components/ContactAvatar.vue'
 import AccountTag from '@/components/AccountTag.vue'
@@ -130,7 +130,8 @@ async function submit() {
   try {
     await props.sendFn(text)
     draft.value = ''
-    aiDraft.value = null
+    picked.value = null
+    suggestion.value = null // 已回覆，候選作廢
     await toBottom()
   } catch {
     // 錯誤由 http 攔截器提示；保留草稿讓使用者重送
@@ -139,7 +140,7 @@ async function submit() {
   }
 }
 
-// --- AI 建議回覆：只把草稿放進輸入框，送出一律由人按 ---
+// --- AI 建議回覆：一次給數個版本，點一個放進輸入框，送出一律由人按 ---
 const AUTO_KEY = 'lc-ai-suggest-auto' // 每個瀏覽器各自記；預設開
 function loadAuto() {
   try {
@@ -156,11 +157,13 @@ watch(autoSuggest, (v) => {
   } catch {
     // 無痕模式等寫不進去：只在這次有效
   }
+  if (!v) suggestion.value = null // 關掉就收起候選
 })
 const suggesting = ref(false)
-const aiDraft = ref<Suggestion | null>(null)
-// 輸入框還是原封不動的 AI 草稿時才顯示標籤與警示；一改字或送出就消失
-const showDraftTag = computed(() => !!aiDraft.value && draft.value === aiDraft.value.text)
+const suggestion = ref<Suggestion | null>(null) // 目前的候選（還沒挑或挑完仍保留，可換一個）
+const picked = ref<SuggestOption | null>(null) // 最後放進輸入框的那個版本
+// 輸入框還是原封不動的 AI 版本時才顯示標籤；一改字或送出就消失
+const showDraftTag = computed(() => !!picked.value && draft.value === picked.value.text)
 let suggestSeq = 0 // 換對話或重新要求時，舊的回應作廢
 const autoTried = new Set<number>()
 
@@ -175,18 +178,12 @@ onMounted(async () => {
 async function runSuggest(auto: boolean) {
   const convId = props.conversation.id
   const seq = ++suggestSeq
-  const snapshot = draft.value
   suggesting.value = true
   try {
     const r = await inboxApi.suggest(convId, auto)
     if (!r || seq !== suggestSeq || convId !== props.conversation.id) return
-    if (draft.value !== snapshot) {
-      // 等待期間輸入框被改過：不覆蓋使用者打的字
-      if (!auto) ElMessage.info('輸入框內容已變動，已略過 AI 建議')
-      return
-    }
-    draft.value = r.text
-    aiDraft.value = r
+    if (!r.options.length) return
+    suggestion.value = r
   } catch {
     // 錯誤由 http 攔截器提示
   } finally {
@@ -194,12 +191,16 @@ async function runSuggest(auto: boolean) {
   }
 }
 
-async function onSuggestClick() {
+function onSuggestClick() {
   if (suggesting.value || !canSend.value) return
-  // 已有自己打的字（不是原封不動的 AI 草稿）→ 先問要不要取代
-  if (draft.value.trim() && !showDraftTag.value) {
+  void runSuggest(false)
+}
+
+// 點一個版本：放進輸入框。輸入框已有自己打的字（不是原封不動的 AI 版本）→ 先問要不要取代
+async function pickOption(o: SuggestOption) {
+  if (draft.value.trim() && !showDraftTag.value && draft.value !== o.text) {
     try {
-      await ElMessageBox.confirm('輸入框已經有內容，要用 AI 建議取代嗎？', '取代輸入框內容', {
+      await ElMessageBox.confirm('輸入框已經有內容，要用這個版本取代嗎？', '取代輸入框內容', {
         confirmButtonText: '取代',
         cancelButtonText: '保留我的',
         type: 'warning',
@@ -208,18 +209,26 @@ async function onSuggestClick() {
       return
     }
   }
-  await runSuggest(false)
+  draft.value = o.text
+  picked.value = o
 }
 
-// 開啟「真人」處理、最後一則是顧客的對話，輸入框又是空的 → 自動擬一份放進去（不送出）
+function dismissSuggestion() {
+  suggestSeq++
+  suggesting.value = false
+  suggestion.value = null
+}
+
+// 開啟自動建議時：「真人」處理、最後一則是顧客的對話 → 自動要一組候選（只顯示，不放進輸入框、不送出）
 function maybeAutoSuggest() {
   const c = props.conversation
-  if (!autoSuggest.value || !aiConfigured.value || suggesting.value) return
+  if (!autoSuggest.value || !aiConfigured.value || suggesting.value || suggestion.value) return
   if (c.handler !== 'human' || !canSend.value || !props.messages) return
   const last = props.messages[props.messages.length - 1]
   if (!last || last.direction !== 'in' || last.deleted) return
-  if (draft.value.trim() || autoTried.has(c.id)) return
-  autoTried.add(c.id)
+  const key = last.id
+  if (autoTried.has(key)) return
+  autoTried.add(key)
   void runSuggest(true)
 }
 watch(
@@ -227,13 +236,22 @@ watch(
   () => {
     suggestSeq++ // 作廢上一段對話還在路上的建議
     suggesting.value = false
-    autoTried.clear()
-    if (showDraftTag.value) draft.value = '' // 沒動過的 AI 草稿不帶到別的對話
-    aiDraft.value = null
+    if (showDraftTag.value) draft.value = '' // 沒動過的 AI 版本不帶到別的對話
+    picked.value = null
+    suggestion.value = null
+  },
+)
+// 顧客又傳新訊息 → 舊候選過時，收起來讓自動建議重新要
+watch(
+  () => props.messages?.[props.messages.length - 1]?.id,
+  (id, prev) => {
+    if (prev !== undefined && id !== prev && props.messages?.[props.messages.length - 1]?.direction === 'in') {
+      suggestion.value = null
+    }
   },
 )
 watch(
-  [() => props.conversation.id, () => props.messages !== undefined, () => props.conversation.handler, aiConfigured, autoSuggest],
+  [() => props.conversation.id, () => props.messages?.[props.messages.length - 1]?.id, () => props.conversation.handler, aiConfigured, autoSuggest, suggestion],
   maybeAutoSuggest,
   { immediate: true },
 )
@@ -397,25 +415,41 @@ const handler = computed({
               <path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" />
             </svg>
           </template>
-          AI 建議
+          {{ suggestion ? '換一組' : 'AI 建議' }}
         </el-button>
-        <HelpTip :width="230">
-          <label class="auto-row"><el-switch v-model="autoSuggest" size="small" />開啟對話時自動擬稿</label>
-          <div class="auto-sub">草稿只放進輸入框，不會自動送出。</div>
-        </HelpTip>
-        <template v-if="showDraftTag && aiDraft">
+        <label class="auto-row"><el-switch v-model="autoSuggest" size="small" />自動建議</label>
+        <HelpTip text="開啟時，顧客傳訊後自動列出幾個回覆版本；點一個放進輸入框，不會自動送出。" />
+        <template v-if="showDraftTag && picked">
           <span class="ai-tag">AI 草稿，送出前請確認</span>
-          <HelpTip v-if="aiDraft.basis.length" :width="240">
+          <HelpTip v-if="picked.basis.length" :width="240">
             參考的知識庫：
             <ul class="basis">
-              <li v-for="b in aiDraft.basis" :key="b">{{ b }}</li>
+              <li v-for="b in picked.basis" :key="b">{{ b }}</li>
             </ul>
           </HelpTip>
         </template>
       </div>
-      <div v-if="showDraftTag && aiDraft?.warning" class="ai-warn" role="status">
+      <div v-if="aiConfigured && (suggestion || (suggesting && autoSuggest))" class="ai-picks">
+        <template v-if="suggestion">
+          <button
+            v-for="(o, i) in suggestion.options"
+            :key="i"
+            type="button"
+            class="pick"
+            :class="{ active: showDraftTag && picked?.text === o.text }"
+            :disabled="!canSend"
+            @click="pickOption(o)"
+          >
+            <span class="pick-label">{{ o.label }}</span>
+            <span class="pick-text">{{ o.text }}</span>
+          </button>
+          <button type="button" class="pick-close" aria-label="收起建議" @click="dismissSuggestion">✕</button>
+        </template>
+        <div v-else class="pick-loading">AI 正在擬回覆…</div>
+      </div>
+      <div v-if="suggestion?.warning" class="ai-warn" role="status">
         <el-icon><WarningFilled /></el-icon>
-        <span>{{ aiDraft.warning }}</span>
+        <span>{{ suggestion.warning }}</span>
       </div>
       <div class="composer">
         <el-input
@@ -754,10 +788,78 @@ const handler = computed({
   gap: 8px;
   cursor: pointer;
 }
-.auto-sub {
-  margin-top: 4px;
+.auto-row {
   font-size: 12px;
   color: var(--lc-muted);
+}
+.ai-picks {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  margin: 0 4px 8px;
+  padding-right: 26px;
+  overflow-x: auto;
+}
+.pick {
+  flex: 1 1 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  background: var(--lc-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+  &:hover:not(:disabled),
+  &.active {
+    border-color: var(--el-color-primary);
+  }
+  &.active {
+    background: var(--lc-tone-sage-bg);
+  }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+.pick-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+.pick-text {
+  font-size: 13px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pick-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--lc-muted);
+  cursor: pointer;
+  &:hover {
+    color: inherit;
+    background: var(--lc-border);
+  }
+}
+.pick-loading {
+  font-size: 12px;
+  color: var(--lc-muted);
+  padding: 6px 2px;
 }
 .basis {
   margin: 4px 0 0;

@@ -31,7 +31,11 @@ func (f *fakeSuggester) Suggest(_ context.Context, st automation.Settings, kb []
 	defer f.mu.Unlock()
 	f.calls++
 	f.st, f.kb, f.turns = st, kb, turns
-	return automation.Suggestion{Text: fakeDraft, Basis: []string{"A店營業時間"}, Warning: "知識庫沒有價格資訊"}, nil
+	return automation.Suggestion{Warning: "知識庫沒有價格資訊", Options: []automation.SuggestOption{
+		{Label: "直接回答", Text: fakeDraft, Basis: []string{"A店營業時間"}},
+		{Label: "簡短版", Text: "9-18 喔", Basis: nil},
+		{Label: "請顧客補充", Text: "請問想哪天來呢？", Basis: []string{}},
+	}}, nil
 }
 
 type suggestEnv struct {
@@ -99,7 +103,8 @@ func TestSuggestReturnsDraftWithAccountDataOnly(t *testing.T) {
 	e := setupSuggest(t)
 	res := e.owner.json("POST", suggestPath(e.convA), "", http.StatusOK)
 	out := decode[automation.Suggestion](t, res)
-	if out.Text != fakeDraft || len(out.Basis) != 1 || out.Basis[0] != "A店營業時間" || out.Warning != "知識庫沒有價格資訊" {
+	if len(out.Options) != 3 || out.Options[0].Text != fakeDraft || out.Options[0].Label != "直接回答" || len(out.Options[0].Basis) != 1 ||
+		out.Options[0].Basis[0] != "A店營業時間" || out.Options[1].Basis == nil || out.Warning != "知識庫沒有價格資訊" {
 		t.Fatalf("response: %+v", out)
 	}
 	// 呼叫端交給 AI 的是該對話所屬帳號（A）的人設與知識庫，不含 B

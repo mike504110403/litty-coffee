@@ -93,14 +93,33 @@ func TestSuggestUserMessageLimits(t *testing.T) {
 }
 
 func TestFinishSuggestionKeepsOnlyRealKnowledgeTitles(t *testing.T) {
-	kb := []Knowledge{{Title: "營業時間", Content: "x", Enabled: true}, {Title: "停用", Content: "y", Enabled: false}}
-	s := finishSuggestion(suggestOut{Draft: "  你好  ", Basis: []string{"營業時間", "營業時間", "模型編的", "停用"}, Warning: " 缺價格 "}, kb)
-	if s.Text != "你好" || len(s.Basis) != 1 || s.Basis[0] != "營業時間" || s.Warning != "缺價格" {
-		t.Fatalf("%+v", s)
+	kb := []Knowledge{{Title: "營業時間", Content: "9-18", Enabled: true}, {Title: "停用", Content: "x", Enabled: false}}
+	s := finishSuggestion(suggestOut{Warning: " 缺價格 ", Options: []suggestOptionOut{
+		{Label: " 直接回答 ", Draft: "  你好  ", Basis: []string{"營業時間", "營業時間", "模型編的", "停用"}},
+		{Label: "", Draft: "你好"}, // 與第一個重複 → 丟掉
+		{Label: "x", Draft: "   "}, // 空 → 丟掉
+		{Label: "這是一個非常非常非常長的標籤文字", Draft: "第二版"},
+	}}, kb)
+	if s.Warning != "缺價格" || len(s.Options) != 2 {
+		t.Fatalf("got %+v", s)
 	}
-	s = finishSuggestion(suggestOut{Draft: strings.Repeat("a", 3000)}, nil)
-	if len([]rune(s.Text)) != suggestMaxDraftRunes || s.Basis == nil {
-		t.Fatalf("草稿應截斷且 basis 非 nil：%d %v", len([]rune(s.Text)), s.Basis)
+	o := s.Options[0]
+	if o.Text != "你好" || o.Label != "直接回答" || len(o.Basis) != 1 || o.Basis[0] != "營業時間" {
+		t.Fatalf("got %+v", o)
+	}
+	if len([]rune(s.Options[1].Label)) != suggestMaxLabelRunes || s.Options[1].Basis == nil {
+		t.Fatalf("標籤應截斷且 basis 非 nil：%+v", s.Options[1])
+	}
+	s = finishSuggestion(suggestOut{Options: []suggestOptionOut{{Draft: strings.Repeat("a", 3000)}}}, nil)
+	if len([]rune(s.Options[0].Text)) != suggestMaxDraftRunes || s.Options[0].Label != "版本 1" {
+		t.Fatalf("草稿應截斷、空標籤補預設：%+v", s.Options[0].Label)
+	}
+	var many []suggestOptionOut
+	for i := 0; i < 8; i++ {
+		many = append(many, suggestOptionOut{Draft: strings.Repeat("b", i+1)})
+	}
+	if n := len(finishSuggestion(suggestOut{Options: many}, nil).Options); n != suggestMaxOptions {
+		t.Fatalf("最多 %d 個，got %d", suggestMaxOptions, n)
 	}
 }
 

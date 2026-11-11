@@ -62,10 +62,14 @@ export interface Message {
   createdAt: string
 }
 
-// AI 建議回覆：草稿只放進輸入框，後端不會送出任何訊息
-export interface Suggestion {
+// AI 建議回覆：一次給數個版本讓店員挑，選了只放進輸入框，後端不會送出任何訊息
+export interface SuggestOption {
+  label: string // 版本方向，例如「直接回答」「請顧客補充」
   text: string
   basis: string[] // 用到的知識庫條目標題
+}
+export interface Suggestion {
+  options: SuggestOption[]
   warning?: string // 知識庫沒涵蓋或需店員判斷的地方
 }
 

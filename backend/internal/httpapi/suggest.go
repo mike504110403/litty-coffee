@@ -163,12 +163,14 @@ func (s *Server) suggestReply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "AI 呼叫失敗，請稍後再試")
 		return
 	}
-	if strings.TrimSpace(sg.Text) == "" {
+	if len(sg.Options) == 0 {
 		writeErr(w, http.StatusUnprocessableEntity, "AI 沒有產生內容，請自行回覆")
 		return
 	}
-	if sg.Basis == nil {
-		sg.Basis = []string{}
+	for i := range sg.Options {
+		if sg.Options[i].Basis == nil {
+			sg.Options[i].Basis = []string{}
+		}
 	}
 	writeJSON(w, http.StatusOK, sg)
 }
