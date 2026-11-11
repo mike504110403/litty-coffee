@@ -35,7 +35,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 ## 部署
 
 - 細節（架構、首次開機、GitHub Secrets／Environments、部署與回滾、備份還原、查日誌）見 `deploy/README.md`
-- push `dev` → 部署 dev；push `main` → 部署 prod；CI 通過才建映像與部署（`.github/workflows/`）
+- push `dev` → 部署 dev：CI 與建映像同時跑（只推 `<sha>` tag），兩者都過才改標 `dev` 並部署；push `main` → 部署 prod：同一個 commit 在 dev 成功部署過就直接把那份映像改標 `prod`（不重跑 CI、不重建），否則走完整流程（`.github/workflows/deploy.yml`）
 - 主機上的真 `.env` 在 `/opt/litty/<env>/.env`，範本在 `deploy/env/`，真值不進 git
 
 ## 開發模擬器

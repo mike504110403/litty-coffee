@@ -1,6 +1,8 @@
 name: Deploy
 
-# push dev → 部署 dev；push main → 部署 prod。先跑 CI（同一份 ci.yml），通過才建映像、部署。
+# push dev → 部署 dev：CI（同一份 ci.yml）與建映像（只推 <sha> tag）同時跑，兩者都過才改標 dev、部署。
+# push main → 部署 prod：同一個 commit 已在 dev 成功部署過 → 直接把那份 <sha> 映像改標 prod 部署（不重跑 CI、不重建）；
+#   沒在 dev 部署過 → 走與 dev 相同的完整流程。
 # 手動觸發（workflow_dispatch）＝回滾：把既有的 <sha> 映像重新標成 dev／prod 後部署，不重建。
 on:
   push:
@@ -33,9 +35,14 @@ env:
 jobs:
   meta:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # 查 dev 是否已成功部署過同一個 commit
     outputs:
       env: ${{ steps.m.outputs.env }}
       tag: ${{ steps.m.outputs.tag }}
+      # reuse=true：直接沿用既有的 <sha> 映像（不跑 CI、不重建），只在部署時改標成環境 tag
+      reuse: ${{ steps.m.outputs.reuse }}
     steps:
       - id: m
         env:
@@ -44,7 +51,10 @@ jobs:
           IN_SHA: ${{ inputs.sha }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
+          reuse=false
           if [ "$EVENT" = workflow_dispatch ]; then
             env_name="$IN_ENV"
             tag="$IN_SHA"
@@ -52,21 +62,33 @@ jobs:
               echo "sha 必須是完整 40 碼 commit sha" >&2
               exit 1
             fi
+            reuse=true
           else
             if [ "$REF" = main ]; then env_name=prod; else env_name=dev; fi
             tag="$SHA"
+            # main：同一個 commit 已在 dev 成功部署過（CI 通過、映像已建好且 dev 驗過）→ 直接升級同一份映像
+            if [ "$env_name" = prod ]; then
+              n=$(gh api "repos/$REPO/actions/workflows/deploy.yml/runs?branch=dev&head_sha=$SHA&status=success&per_page=1" --jq '.total_count' || echo 0)
+              if [ "${n:-0}" -gt 0 ]; then reuse=true; fi
+            fi
           fi
-          echo "env=$env_name" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "部署 $env_name ← $tag"
+          {
+            echo "env=$env_name"
+            echo "tag=$tag"
+            echo "reuse=$reuse"
+          } >> "$GITHUB_OUTPUT"
+          echo "部署 $env_name ← $tag（沿用既有映像：$reuse）"
 
   ci:
-    if: github.event_name == 'push'
+    needs: meta
+    if: github.event_name == 'push' && needs.meta.outputs.reuse != 'true'
     uses: ./.github/workflows/ci.yml
 
+  # 與 CI 同時跑：只推 <sha> tag；環境 tag（dev／prod）由 deploy 在 CI 也通過後才改標，
+  # 所以 CI 沒過的映像永遠不會被主機拉到
   build:
-    needs: [meta, ci]
-    if: github.event_name == 'push'
+    needs: meta
+    if: github.event_name == 'push' && needs.meta.outputs.reuse != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -95,48 +117,25 @@ jobs:
           context: ${{ matrix.context }}
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ matrix.image }}:${{ needs.meta.outputs.tag }}
-            ${{ matrix.image }}:${{ needs.meta.outputs.env }}
+          tags: ${{ matrix.image }}:${{ needs.meta.outputs.tag }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.meta.outputs.tag }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-  retag:
-    needs: meta
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: 把 <sha> 映像重新標成環境 tag
-        env:
-          ENV_NAME: ${{ needs.meta.outputs.env }}
-          TAG: ${{ needs.meta.outputs.tag }}
-        run: |
-          for img in "$BACKEND_IMAGE" "$WEB_IMAGE"; do
-            docker buildx imagetools create -t "$img:$ENV_NAME" "$img:$TAG"
-          done
-
   deploy:
-    needs: [meta, build, retag]
+    needs: [meta, ci, build]
+    # 沿用既有映像（main 升級、手動回滾）只要 meta 成功；否則 CI 與建置都要成功
     if: >-
       !cancelled() && needs.meta.result == 'success' &&
-      (needs.build.result == 'success' || needs.retag.result == 'success')
+      (needs.meta.outputs.reuse == 'true' ||
+       (needs.ci.result == 'success' && needs.build.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
-      packages: read
+      packages: write
     environment:
       name: ${{ needs.meta.outputs.env }}
       url: ${{ needs.meta.outputs.env == 'prod' && 'https://admin.litty-coffee.com' || '' }}
@@ -146,6 +145,20 @@ jobs:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: deploy
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 把 <sha> 映像標成環境 tag
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          for img in "$BACKEND_IMAGE" "$WEB_IMAGE"; do
+            docker buildx imagetools create -t "$img:$ENV_NAME" "$img:$TAG"
+          done
 
       - name: 加入 Tailscale
         uses: tailscale/github-action@v4
