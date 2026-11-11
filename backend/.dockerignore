@@ -9,3 +9,5 @@ Dockerfile
 .dockerignore
 **/*.md
 .DS_Store
+# go:embed 用到的提示檔要留著（guard.go 嵌入 prompts/security.md）
+!internal/automation/prompts/*.md
