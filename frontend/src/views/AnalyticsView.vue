@@ -196,6 +196,7 @@ const busiest = computed(() => {
             </div>
           </header>
           <ColumnChart
+            :key="`c${days}`"
             :categories="dailyCats"
             :short-labels="dailyShort"
             :series="[{ key: 'in', label: '顧客訊息', color: C_SINGLE, values: data.daily.map((d) => d.inbound) }]"
@@ -212,6 +213,7 @@ const busiest = computed(() => {
             </div>
           </header>
           <ColumnChart
+            :key="`c${days}`"
             :categories="dailyCats"
             :short-labels="dailyShort"
             :series="[
@@ -219,6 +221,7 @@ const busiest = computed(() => {
               { key: 'human', label: '真人', color: C_HUMAN, values: data.daily.map((d) => d.human) },
             ]"
             :show-table="tableView"
+            :page-size="6"
             description="每日店家回覆數堆疊長條圖，分自動與真人"
           />
         </section>
@@ -230,7 +233,7 @@ const busiest = computed(() => {
               <p>AI 判斷的訊息意圖</p>
             </div>
           </header>
-          <BarList :items="intentItems" :color="C_SINGLE" empty-text="AI 回覆過的訊息才會有意圖分類" />
+          <BarList :key="`b${days}`" :items="intentItems" :color="C_SINGLE" empty-text="AI 回覆過的訊息才會有意圖分類" />
         </section>
 
         <section class="card lc-card">
@@ -246,6 +249,7 @@ const busiest = computed(() => {
             </div>
           </header>
           <ColumnChart
+            :key="`c${days}`"
             :categories="data.hours.map((_, h) => `${h}:00–${h + 1}:00`)"
             :short-labels="data.hours.map((_, h) => `${h}`)"
             :series="[{ key: 'h', label: '顧客訊息', color: C_SINGLE, values: data.hours }]"
@@ -263,6 +267,7 @@ const busiest = computed(() => {
             </div>
           </header>
           <BarList
+            :key="`r${days}`"
             :items="data.topRules.map((r) => ({ label: r.name, value: r.hitCount }))"
             :color="C_SINGLE"
             empty-text="還沒有規則被命中"
@@ -379,6 +384,17 @@ const busiest = computed(() => {
 .card {
   padding: 16px 18px 18px;
   min-width: 0;
+  // 圖表卡片固定高度：表格／清單太多列時在卡片內分頁，不撐高卡片（貼文成效表格另計）
+  &:not(.posts-card) {
+    height: 360px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    > :last-child {
+      flex: 1;
+      min-height: 0;
+    }
+  }
   &.wide {
     grid-column: span 1;
   }

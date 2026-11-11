@@ -1,20 +1,29 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 // 排行用的水平長條：名稱在左、長條＋數值在右；單一系列不需圖例
 const props = withDefaults(
-  defineProps<{ items: { label: string; value: number }[]; color?: string; emptyText?: string }>(),
-  { color: 'var(--lc-chart-1)', emptyText: '還沒有資料' },
+  defineProps<{ items: { label: string; value: number }[]; color?: string; emptyText?: string; pageSize?: number }>(),
+  { color: 'var(--lc-chart-1)', emptyText: '還沒有資料', pageSize: 7 },
 )
+
+// 項目多時在卡片內分頁，卡片高度不變；長條長度仍以全部資料的最大值為準，換頁時比例一致
+const page = ref(1)
+watch(
+  () => props.items.length,
+  () => (page.value = 1),
+)
+const pageItems = computed(() => props.items.slice((page.value - 1) * props.pageSize, page.value * props.pageSize))
 
 const max = computed(() => Math.max(...props.items.map((i) => i.value), 1))
 const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
 </script>
 
 <template>
-  <ul v-if="items.length" class="bar-list">
+  <div v-if="items.length" class="bar-wrap">
+  <ul class="bar-list">
     <li
-      v-for="it in items"
+      v-for="it in pageItems"
       :key="it.label"
       :title="`${it.label}：${it.value}（${Math.round((it.value / (total || 1)) * 100)}%）`"
     >
@@ -25,10 +34,31 @@ const total = computed(() => props.items.reduce((n, i) => n + i.value, 0))
       </span>
     </li>
   </ul>
+  <el-pagination
+    v-if="items.length > pageSize"
+    v-model:current-page="page"
+    :page-size="pageSize"
+    :total="items.length"
+    layout="prev, pager, next"
+    size="small"
+    :pager-count="5"
+    class="pager"
+  />
+  </div>
   <div v-else class="empty">{{ emptyText }}</div>
 </template>
 
 <style scoped lang="scss">
+.bar-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.pager {
+  margin-top: auto;
+  padding-top: 8px;
+  justify-content: center;
+}
 .bar-list {
   list-style: none;
   margin: 0;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 export interface ColumnSeries {
   key: string
@@ -16,9 +16,22 @@ const props = withDefaults(
     height?: number
     description: string // 給螢幕閱讀器的圖表說明
     showTable?: boolean
+    pageSize?: number // 表格模式每頁幾列；超過就在卡片內分頁，卡片高度不變
   }>(),
-  { height: 200, shortLabels: undefined, showTable: false },
+  { height: 200, shortLabels: undefined, showTable: false, pageSize: 7 },
 )
+
+// 表格分頁（資料變了就回到第一頁）
+const page = ref(1)
+watch(
+  // 用內容判斷：訊息時段永遠 24 列，切換天數時列數不變但數字會變
+  () => props.categories.join('|') + '#' + props.series.map((x) => x.values.join(',')).join('|'),
+  () => (page.value = 1),
+)
+const pageRows = computed(() => {
+  const start = (page.value - 1) * props.pageSize
+  return props.categories.slice(start, start + props.pageSize).map((c, k) => ({ c, i: start + k }))
+})
 
 // 每根柱子只畫大於 0 的段（讓 :last-child 一定是最上面那段）
 const stacks = computed(() =>
@@ -61,7 +74,9 @@ const multi = computed(() => props.series.length > 1)
       <span v-for="s in series" :key="s.key" class="key"><i :style="{ background: s.color }" />{{ s.label }}</span>
     </div>
 
-    <table v-if="showTable" class="data-table">
+    <div v-if="showTable" class="table-wrap">
+    <div class="table-scroll">
+    <table class="data-table">
       <thead>
         <tr>
           <th />
@@ -70,13 +85,25 @@ const multi = computed(() => props.series.length > 1)
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(c, i) in categories" :key="c">
+        <tr v-for="{ c, i } in pageRows" :key="c">
           <th>{{ c }}</th>
           <td v-for="s in series" :key="s.key">{{ s.values[i] }}</td>
           <td v-if="multi">{{ totals[i] }}</td>
         </tr>
       </tbody>
     </table>
+    </div>
+    <el-pagination
+      v-if="categories.length > pageSize"
+      v-model:current-page="page"
+      :page-size="pageSize"
+      :total="categories.length"
+      layout="prev, pager, next"
+      size="small"
+      :pager-count="5"
+      class="pager"
+    />
+    </div>
 
     <div v-else class="plot" :style="{ height: `${height}px` }" role="img" :aria-label="description">
       <div class="y-axis">
@@ -247,6 +274,30 @@ const multi = computed(() => props.series.length > 1)
     color: var(--lc-text);
     font-variant-numeric: tabular-nums;
   }
+}
+// 表格模式撐滿卡片剩餘高度：表格區可在卡片內捲動，分頁鈕固定在底部不會被擠出卡片
+.column-chart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.table-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  .table-scroll {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+}
+.pager {
+  flex: none;
+  margin-top: auto;
+  padding-top: 8px;
+  justify-content: center;
 }
 .data-table {
   width: 100%;
