@@ -21,6 +21,7 @@ import (
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
+	"github.com/mike504110403/litty-coffee/backend/internal/audit"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
@@ -58,7 +59,7 @@ func setupFull(t *testing.T) *fullEnv {
 INSERT INTO automation_settings (ig_account_id) VALUES (NULL)`); err != nil {
 		t.Fatal(err)
 	}
-	authSvc := &auth.Service{DB: pool, Secret: []byte("test-secret")}
+	authSvc := &auth.Service{DB: pool, Secret: []byte("test-secret"), Audit: &audit.Store{DB: pool}}
 	if err := authSvc.EnsureAdmin(ctx, "boss", "boss-password"); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ INSERT INTO automation_settings (ig_account_id) VALUES (NULL)`); err != nil {
 	accounts := &account.Service{DB: pool, Box: box, OAuth: nil}
 	inb.Creds = accounts
 	s := &Server{
-		DB: pool, Auth: authSvc, Hub: hub, Fake: fake, Inbox: inb,
+		DB: pool, Auth: authSvc, Hub: hub, Fake: fake, Inbox: inb, Audit: authSvc.Audit,
 		Auto:      &automation.Engine{Store: &automation.Store{DB: pool}, Inbox: inb, Ctx: ctx},
 		CRM:       &crm.Service{DB: pool},
 		Analytics: &analytics.Service{DB: pool, Loc: time.UTC},

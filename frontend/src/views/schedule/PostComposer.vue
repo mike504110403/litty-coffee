@@ -18,6 +18,7 @@ import IgPreview from '@/components/IgPreview.vue'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import PostInsights from './PostInsights.vue'
+import HelpTip from '@/components/HelpTip.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 // defaultAccount：新貼文預設的帳號（例如行事曆正篩選某帳號）；沒給就用上次用的
@@ -262,6 +263,7 @@ const title = computed(() => {
         <div class="field">
           <label>
             {{ form.kind === 'carousel' ? `圖片／影片（${form.media.length}/10，可調順序）` : form.kind === 'reel' ? '影片' : '圖片' + (form.kind === 'story' ? '或影片' : '') }}
+            <HelpTip v-if="!readonly" text="圖片 JPEG／PNG（PNG 會自動轉 JPEG）、最大 8MB；影片 MP4／MOV。" />
           </label>
           <div class="media-grid">
             <div v-for="(m, i) in form.media" :key="m.id" class="thumb">
@@ -292,7 +294,6 @@ const title = computed(() => {
           </div>
           <input ref="fileInput" type="file" :accept="accept" :multiple="form.kind === 'carousel'" hidden @change="onFiles" />
           <p v-if="ratioWarning" class="warn">{{ ratioWarning }}</p>
-          <p v-if="!readonly" class="hint">圖片 JPEG／PNG（PNG 會自動轉 JPEG）、最大 8MB；影片 MP4／MOV。</p>
         </div>
 
         <div class="field">
@@ -512,11 +513,6 @@ const title = computed(() => {
   color: var(--lc-fail-fg);
   font-size: 12px;
   margin: 8px 0 0;
-}
-.hint {
-  color: var(--lc-muted);
-  font-size: 12px;
-  margin: 6px 0 0;
 }
 .counter {
   display: flex;

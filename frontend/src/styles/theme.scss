@@ -259,6 +259,10 @@ body {
   font-weight: 700;
 }
 
+.lc-page-title--solo {
+  margin-bottom: 20px; // 沒有副標的頁面
+}
+
 .lc-page-sub {
   margin: 0 0 20px;
   color: var(--lc-muted);

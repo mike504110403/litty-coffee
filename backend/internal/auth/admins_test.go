@@ -128,12 +128,18 @@ func TestMiddlewareRejectsDisabledUsersOldToken(t *testing.T) {
 	if c := rec.Result().Cookies(); len(c) != 1 || c[0].Name != CookieName || c[0].MaxAge >= 0 {
 		t.Fatalf("cookie not cleared: %+v", c)
 	}
-	// 重新啟用後同一 token 恢復可用
+	// 停用會撤銷 session：重新啟用後舊 token 仍無效，要重新登入
 	if _, err := s.UpdateAdmin(ctx, owner, staff.ID, AdminPatch{Disabled: ptr(false)}); err != nil {
 		t.Fatal(err)
 	}
+	if rec := call(); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token after re-enable: %d", rec.Code)
+	}
+	if _, tok, err = s.Login(ctx, "mei", "password123"); err != nil {
+		t.Fatal(err)
+	}
 	if rec := call(); rec.Code != http.StatusOK {
-		t.Fatalf("after re-enable: %d", rec.Code)
+		t.Fatalf("new login after re-enable: %d", rec.Code)
 	}
 }
 

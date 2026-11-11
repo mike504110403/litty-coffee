@@ -26,6 +26,7 @@ export const permMeta: Record<Perm, { label: string; desc: string }> = {
   ig_accounts: { label: 'IG 帳號', desc: '連結／斷開／續期 IG 帳號、串接資訊' },
   credentials: { label: '串接憑證', desc: 'IG App 與 Claude 憑證' },
   admins: { label: '管理員', desc: '新增、修改、停用管理員' },
+  audit: { label: '操作紀錄', desc: '查看後台所有管理員的操作紀錄' },
 }
 
 export const adminsApi = {

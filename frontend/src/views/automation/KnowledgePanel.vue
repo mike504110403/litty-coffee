@@ -66,10 +66,6 @@ async function remove(k: Knowledge) {
 
 <template>
   <div>
-    <div class="intro lc-card">
-      AI 只會根據這裡的內容回答。寫得越具體（價格、時間、規則），AI 越不需要轉真人。沒填的段落不會給 AI 看。
-    </div>
-
     <div v-loading="loading" class="list">
       <div v-for="k in items" :key="k.id" class="item lc-card" :class="{ off: !k.enabled }">
         <div class="i-head">
@@ -107,15 +103,6 @@ async function remove(k: Knowledge) {
 </template>
 
 <style scoped lang="scss">
-.intro {
-  padding: 14px 16px;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--lc-roast);
-  background: var(--lc-warn-bg-2);
-  border-color: var(--lc-warn-line);
-  margin-bottom: 14px;
-}
 .list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));

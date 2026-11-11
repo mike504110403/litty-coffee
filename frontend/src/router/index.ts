@@ -23,8 +23,8 @@ router.beforeEach(async (to) => {
   if (!auth.checked) await auth.fetchMe()
   if (to.meta.public) return auth.user && to.name === 'login' ? { name: 'dashboard' } : true
   if (!auth.user) return { name: 'login', query: { redirect: to.fullPath } }
-  const perm = to.meta.perm as Perm | null | undefined
-  if (perm && !auth.can(perm)) return to.name === 'dashboard' ? true : { name: 'dashboard' }
+  const perm = to.meta.perm as Perm | Perm[] | null | undefined
+  if (perm && !auth.canAny(perm)) return to.name === 'dashboard' ? true : { name: 'dashboard' }
   return true
 })
 

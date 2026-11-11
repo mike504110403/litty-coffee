@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { devApi } from '@/api/inbox'
 import AccountSelect from '@/components/AccountSelect.vue'
 import { useAccountsStore } from '@/stores/accounts'
+import HelpTip from '@/components/HelpTip.vue'
 
 const visible = defineModel<boolean>({ required: true })
 
@@ -52,8 +53,11 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="模擬客人傳 DM" width="min(440px, 92vw)" align-center>
-    <p class="note">開發模式專用：組出和 IG webhook 相同格式的事件，走完整的入庫流程。</p>
+  <el-dialog v-model="visible" width="min(440px, 92vw)" align-center>
+    <template #header>
+      模擬客人傳 DM
+      <HelpTip text="開發模式專用：組出和 IG webhook 相同格式的事件，走完整的入庫流程。" />
+    </template>
     <el-form label-position="top" @submit.prevent="send">
       <el-form-item label="傳給哪個店家帳號">
         <AccountSelect v-model="account" class="full" placeholder="請先到設定頁連結 IG 帳號" />
@@ -103,11 +107,6 @@ async function sendEvent(action: 'read' | 'react' | 'unsend', emoji = '', label 
 <style scoped lang="scss">
 .full {
   width: 100%;
-}
-.note {
-  margin: -6px 0 14px;
-  font-size: 13px;
-  color: var(--lc-muted);
 }
 .people {
   display: flex;

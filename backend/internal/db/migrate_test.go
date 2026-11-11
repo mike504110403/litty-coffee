@@ -301,3 +301,42 @@ func TestMigration13ThrottlePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 00014：單一登入欄位與操作紀錄表；既有管理員資料保留、沒有 session（升級後都要重新登入）。Down 再 Up 也要能跑。
+func TestMigration14SessionAuditPreservesData(t *testing.T) {
+	d := isolated(t)
+	ctx := context.Background()
+	if err := goose.UpToContext(ctx, d, "migrations", 13); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, d, `INSERT INTO admin_users (username, password_hash, display_name, is_owner, permissions, last_login_at)
+VALUES ('boss', 'h1', '老闆', true, '{}', now()), ('mei', 'h2', '小美', false, '{inbox,contacts}', NULL)`)
+	if err := goose.UpToContext(ctx, d, "migrations", 14); err != nil {
+		t.Fatal(err)
+	}
+	if intOf(t, d, `SELECT count(*) FROM admin_users WHERE session_id IS NULL AND last_seen_at IS NULL`) != 2 ||
+		strOf(t, d, `SELECT display_name || password_hash || array_to_string(permissions, ',') FROM admin_users WHERE username = 'mei'`) != "小美h2inbox,contacts" ||
+		intOf(t, d, `SELECT count(*) FROM admin_users WHERE username = 'boss' AND is_owner AND last_login_at IS NOT NULL`) != 1 {
+		t.Fatal("既有管理員資料應保留、沒有 session")
+	}
+	mustExec(t, d, `INSERT INTO audit_logs (admin_id, admin_name, action, detail) VALUES (1, '老闆', 'auth.login', '{}'),
+  (NULL, 'ghost', 'auth.login_failed', '{"username":"ghost"}')`)
+	mustExec(t, d, `INSERT INTO audit_logs (admin_id, action, detail) VALUES (1, 'auth.kicked', '{"session":"abc"}')`)
+	if _, err := d.Exec(`INSERT INTO audit_logs (admin_id, action, detail) VALUES (1, 'auth.kicked', '{"session":"abc"}')`); err == nil {
+		t.Fatal("同一個舊 session 的被踢紀錄應只能一筆")
+	}
+	// 管理員被刪：紀錄保留、admin_id 置空
+	mustExec(t, d, `DELETE FROM admin_users WHERE username = 'boss'`)
+	if intOf(t, d, `SELECT count(*) FROM audit_logs WHERE admin_id IS NULL`) != 3 {
+		t.Fatal("刪管理員後紀錄應保留")
+	}
+	if err := goose.DownToContext(ctx, d, "migrations", 13); err != nil {
+		t.Fatal(err)
+	}
+	if strOf(t, d, `SELECT display_name FROM admin_users WHERE username = 'mei'`) != "小美" {
+		t.Fatal("down: 管理員應保留")
+	}
+	if err := goose.UpContext(ctx, d, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}

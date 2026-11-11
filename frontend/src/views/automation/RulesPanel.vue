@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HelpTip from '@/components/HelpTip.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Promotion, User } from '@element-plus/icons-vue'
@@ -93,7 +94,7 @@ function useExample(e: (typeof examples)[number]) {
 <template>
   <div>
     <div class="bar">
-      <span class="count">{{ rules.length }} 條規則 · 由上而下比對，數字小的先</span>
+      <span class="count">{{ rules.length }} 條規則</span>
       <el-button type="primary" :icon="Plus" @click="openEditor()">新增規則</el-button>
     </div>
 
@@ -155,7 +156,8 @@ function useExample(e: (typeof examples)[number]) {
             <el-radio-button value="regex">正則</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="關鍵字（任一命中即可；不分大小寫與全半形）">
+        <el-form-item>
+          <template #label>關鍵字<HelpTip text="任一命中即可；不分大小寫與全半形。" /></template>
           <div class="kw-edit">
             <el-tag
               v-for="k in form.keywords"
@@ -188,7 +190,7 @@ function useExample(e: (typeof examples)[number]) {
         <div class="inline">
           <el-checkbox v-model="form.handoff">命中後轉真人處理（AI 暫停）</el-checkbox>
           <div class="prio-field">
-            <span>優先順序</span>
+            <span>優先順序<HelpTip text="數字小的先比對。" /></span>
             <el-input-number v-model="form.priority" :min="0" :max="9999" size="small" controls-position="right" />
           </div>
         </div>

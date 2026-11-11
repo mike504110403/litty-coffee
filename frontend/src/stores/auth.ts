@@ -13,6 +13,7 @@ export type Perm =
   | 'ig_accounts'
   | 'credentials'
   | 'admins'
+  | 'audit'
 
 export interface AdminUser {
   id: number
@@ -22,6 +23,8 @@ export interface AdminUser {
   permissions: Perm[] // 有效權限：店長是完整清單
   disabled: boolean
   lastLoginAt: string | null
+  lastSeenAt: string | null // 最後活動（每分鐘最多更新一次）
+  online: boolean // 2 分鐘內有活動且登入中
   createdAt: string
 }
 
@@ -62,5 +65,11 @@ export const useAuthStore = defineStore('auth', () => {
     return u.permissions.includes(perm)
   }
 
-  return { user, checked, fetchMe, login, logout, can }
+  // 任一權限即可（陣列）；null／空陣列＝所有登入者
+  function canAny(perms?: Perm | Perm[] | null): boolean {
+    if (!perms || (Array.isArray(perms) && !perms.length)) return can()
+    return (Array.isArray(perms) ? perms : [perms]).some((p) => can(p))
+  }
+
+  return { user, checked, fetchMe, login, logout, can, canAny }
 })

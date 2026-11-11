@@ -1,32 +1,24 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
-export type ThemeMode = 'system' | 'light' | 'dark'
+export type ThemeMode = 'light' | 'dark'
 
 // 與 index.html 的首繪腳本共用同一個 key
 export const THEME_KEY = 'lc-theme'
-const MODES: ThemeMode[] = ['system', 'light', 'dark']
 
+// 只有淺色／深色；第一次預設淺色。舊版存過的 'system' 一律當淺色
 function readStored(): ThemeMode {
   try {
-    const v = localStorage.getItem(THEME_KEY)
-    if (v && (MODES as string[]).includes(v)) return v as ThemeMode
+    if (localStorage.getItem(THEME_KEY) === 'dark') return 'dark'
   } catch {
     // 隱私模式／被封鎖時讀不到，當作預設
   }
-  return 'system'
+  return 'light'
 }
 
 export const useThemeStore = defineStore('theme', () => {
   const mode = ref<ThemeMode>(readStored())
-  const query = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
-  const systemDark = ref(query?.matches ?? false)
-  // 「跟隨系統」時，系統外觀一變就更新
-  query?.addEventListener('change', (e) => {
-    systemDark.value = e.matches
-  })
-
-  const isDark = computed(() => (mode.value === 'system' ? systemDark.value : mode.value === 'dark'))
+  const isDark = computed(() => mode.value === 'dark')
 
   watch(
     isDark,

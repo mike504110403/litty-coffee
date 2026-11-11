@@ -9,10 +9,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
+	"github.com/mike504110403/litty-coffee/backend/internal/audit"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/ig"
 )
@@ -133,8 +135,12 @@ func (s *Server) igOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, err := r.Cookie(oauthStateCookie)
 	s.setStateCookie(w, "", -1)
+	fail := func(msg string) {
+		s.recordIGConnect(r, audit.ActionIGConnectError, "", map[string]any{"error": audit.Truncate(msg)})
+		s.settingsRedirect(w, r, "ig_error", msg)
+	}
 	if !currentUser(r).AllAccounts() {
-		s.settingsRedirect(w, r, "ig_error", "只有可見全部 IG 帳號的管理員能連結帳號")
+		fail("只有可見全部 IG 帳號的管理員能連結帳號")
 		return
 	}
 	if q.Get("error") != "" {
@@ -142,23 +148,35 @@ func (s *Server) igOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		if q.Get("error_reason") != "user_denied" {
 			msg = "授權失敗：" + q.Get("error_description")
 		}
-		s.settingsRedirect(w, r, "ig_error", msg)
+		fail(msg)
 		return
 	}
 	if err != nil || c.Value == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(q.Get("state"))) != 1 {
-		s.settingsRedirect(w, r, "ig_error", "授權連結已失效，請重新按「連結 IG 帳號」")
+		fail("授權連結已失效，請重新按「連結 IG 帳號」")
 		return
 	}
 	conn, accs, err := s.Accounts.Connect(r.Context(), q.Get("code"))
 	if err != nil {
 		log.Printf("ig oauth: %v", err)
-		s.settingsRedirect(w, r, "ig_error", err.Error())
+		fail(err.Error())
 		return
 	}
+	names := make([]string, 0, len(accs))
 	for _, a := range accs {
 		log.Printf("ig account connected: @%s (%s) via connection %d", a.Username, a.IGUserID, conn.ID)
+		names = append(names, "@"+a.Username)
 	}
+	s.recordIGConnect(r, audit.ActionIGConnect, strconv.FormatInt(conn.ID, 10), map[string]any{"accounts": names})
 	s.settingsRedirect(w, r, "ig", "connected")
+}
+
+// recordIGConnect 記 OAuth callback 的連結結果（GET 不經異動 middleware）。
+func (s *Server) recordIGConnect(r *http.Request, action, connID string, detail map[string]any) {
+	u := currentUser(r)
+	detail["username"] = u.Username
+	status := http.StatusFound
+	s.recordAuth(r, audit.Entry{AdminID: u.ID, AdminName: u.DisplayName, Action: action, TargetType: "connection",
+		TargetID: connID, Detail: detail, Status: status, Success: action == audit.ActionIGConnect})
 }
 
 func (s *Server) accountErr(w http.ResponseWriter, err error) {

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { SwitchButton } from '@element-plus/icons-vue'
 import { ElNotification } from 'element-plus'
 import { contactLabel, type Conversation } from '@/api/inbox'
 import { navItems } from '@/router/nav'
 import { useAuthStore } from '@/stores/auth'
 import { useInboxStore } from '@/stores/inbox'
+import UserMenu from '@/components/UserMenu.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -55,16 +55,11 @@ onBeforeUnmount(() => {
 
 const badge = (name: string) => (name === 'inbox' ? inbox.totalUnread : 0)
 
-const visibleItems = computed(() => navItems.filter((n) => auth.can(n.perm)))
+const visibleItems = computed(() => navItems.filter((n) => auth.canAny(n.perm)))
 const mobileItems = computed(() => visibleItems.value.filter((n) => n.mobile))
+// 手機沒放進底部 tab bar 的項目（顧客、設定、管理員），從頂欄選單進入
+const topItems = computed(() => visibleItems.value.filter((n) => !n.mobile))
 const title = computed(() => (route.meta.title as string | undefined) ?? '')
-const initial = computed(() => (auth.user?.displayName || auth.user?.username || '?').slice(0, 1).toUpperCase())
-
-async function onLogout() {
-  inbox.disconnect()
-  await auth.logout()
-  router.replace({ name: 'login' })
-}
 </script>
 
 <template>
@@ -92,27 +87,14 @@ async function onLogout() {
         </RouterLink>
       </nav>
       <div class="side-footer">
-        <div class="avatar">{{ initial }}</div>
-        <div class="who">{{ auth.user?.displayName || auth.user?.username }}</div>
-        <el-tooltip content="登出" placement="top">
-          <el-button text circle :icon="SwitchButton" @click="onLogout" />
-        </el-tooltip>
+        <UserMenu variant="side" />
       </div>
     </aside>
 
     <!-- 手機頂欄 -->
     <header class="topbar">
       <span class="topbar-title">{{ title }}</span>
-      <el-dropdown trigger="click">
-        <div class="avatar">{{ initial }}</div>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-if="auth.can('contacts')" @click="router.push({ name: 'contacts' })">顧客</el-dropdown-item>
-            <el-dropdown-item @click="router.push({ name: 'settings' })">設定</el-dropdown-item>
-            <el-dropdown-item divided @click="onLogout">登出</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+      <UserMenu variant="top" :links="topItems" />
     </header>
 
     <main class="content">
@@ -221,34 +203,8 @@ async function onLogout() {
 }
 
 .side-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 8px 0;
+  padding-top: 10px;
   border-top: 1px solid var(--lc-side-line);
-  .who {
-    flex: 1;
-    font-size: 14px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  :deep(.el-button) {
-    color: var(--lc-latte);
-  }
-}
-
-.avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--lc-caramel);
-  color: var(--lc-on-fill);
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
 .content {

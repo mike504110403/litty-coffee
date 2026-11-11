@@ -15,6 +15,7 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/appsettings"
+	"github.com/mike504110403/litty-coffee/backend/internal/audit"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/config"
@@ -46,7 +47,11 @@ func main() {
 	}
 	defer pool.Close()
 
-	authSvc := &auth.Service{DB: pool, Secret: []byte(cfg.JWTSecret), Secure: strings.HasPrefix(cfg.WebOrigin, "https://")}
+	// 操作紀錄：登入／登出／被踢／後台異動；背景每天清掉超過 365 天的
+	auditStore := &audit.Store{DB: pool}
+	go auditStore.RunCleanup(ctx)
+	authSvc := &auth.Service{DB: pool, Secret: []byte(cfg.JWTSecret), Secure: strings.HasPrefix(cfg.WebOrigin, "https://"),
+		Audit: auditStore}
 	if err := authSvc.EnsureAdmin(ctx, cfg.AdminUser, cfg.AdminPassword); err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +74,7 @@ func main() {
 	eff := creds.Values()
 
 	hub := realtime.NewHub()
-	api := &httpapi.Server{DB: pool, Auth: authSvc, Hub: hub, Creds: creds}
+	api := &httpapi.Server{DB: pool, Auth: authSvc, Hub: hub, Creds: creds, Audit: auditStore}
 	var messenger ig.Messenger = ig.NewClient(cfg.IGAPIBase)
 	if cfg.DevSimulator {
 		api.Fake = ig.NewFake()

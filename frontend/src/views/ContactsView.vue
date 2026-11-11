@@ -65,8 +65,7 @@ function onUpdated(c: CrmContact) {
   <div>
     <div class="head">
       <div>
-        <h1 class="lc-page-title">顧客</h1>
-        <p class="lc-page-sub">傳過私訊的 IG 用戶；可加標籤、寫備註，方便認出常客</p>
+        <h1 class="lc-page-title lc-page-title--solo">顧客</h1>
       </div>
     </div>
 
@@ -266,6 +265,31 @@ function onUpdated(c: CrmContact) {
   font-size: 12px;
   color: var(--lc-muted);
   flex-shrink: 0;
+}
+@media (min-width: 1024px) {
+  // 桌機：每位顧客一張卡片、兩欄並排，不拉成一條長橫列
+  .list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    align-items: start;
+    overflow: visible;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    :deep(.el-empty) {
+      grid-column: 1 / -1;
+    }
+  }
+  .row {
+    background: var(--lc-surface);
+    border: 1px solid var(--lc-border);
+    border-radius: var(--lc-radius);
+    box-shadow: var(--lc-shadow);
+    &:hover {
+      background: var(--lc-bg-hover-2);
+    }
+  }
 }
 @media (max-width: 768px) {
   .head .lc-page-title {

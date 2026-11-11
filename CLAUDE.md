@@ -13,7 +13,7 @@ stage: mvp
 - 前端：Vue 3＋TS＋Vite＋Element Plus＋Pinia＋vue-router；`frontend/`；用 npm（pnpm 在 Node 20 上會壞）
 - i18n：只做繁中，不掛 vue-i18n（單一店家）
 - 認證：多管理員，bcrypt＋JWT httpOnly cookie；第一個 admin 由 env 建立且為店長（is_owner）
-- 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, ig_accounts, credentials, admins）；店長全權。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
+- 權限：功能逐項勾選（`internal/auth/perms.go`：inbox, contacts, automation, schedule, analytics, ig_accounts, credentials, admins, audit）；店長全權。middleware 每次請求查 DB，停用即踢；`RequirePerm` 包住 `router.go` 各路由群組；最後一位啟用中的店長不能停用或降級；非店長不能授予自己沒有的權限、不能動店長
 - 可見帳號（安全邊界）：`admin_users.ig_account_ids`（NULL＝全部；店長一律全部），見 `internal/auth/scope.go`、`internal/httpapi/scope.go`。清單類 API 用 `?account=` 過濾，範圍外 403；單筆資源（對話、附件、顧客、貼文…）範圍外一律 404；自動回覆、上傳、AI 文案、模擬器必須指定帳號；連線層級（連結、同步、斷開）只限可見全部帳號的人；只看部分帳號的人只能授予自己看得到的帳號、不能授予「全部」
 - 真人回覆記錄 `messages.sent_by_admin_id`，收件匣顯示回覆者名字
 - 處理流程：webhook 先落 `webhook_events`，再由背景處理器依序走規則 → AI → 送出
@@ -87,7 +87,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - 設定頁：依連線列出全部帳號（頭像、名稱、啟用狀態、私訊訂閱、連線到期）。每個帳號可「停用／啟用」（停用＝webhook 拒收、不送訊不發文，資料保留）、「重試訂閱」；每個連線可「同步帳號」（`POST /api/ig/connections/{id}/refresh`）、「重新連結」、「斷開連線」（只刪 token，帳號、顧客、對話保留）
 - 帳號清單 `GET /api/ig/accounts`：所有登入者可用，只回可見帳號（各頁的帳號篩選／選擇器用）
 - 模擬模式：`ig.FakeOAuth` 授權頁直接導回 callback，連上兩個模擬帳號 `dev-litty-coffee`、`dev-litty-roastery`
-- 改密碼：`POST /api/auth/password`，既有 session 不撤銷
+- 改密碼：`POST /api/auth/password`，自己目前的 session 不撤銷
 
 ## 憑證（後台可設定）
 
@@ -95,6 +95,26 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - Meta 欄位：App ID、App Secret、配置 ID、Webhook 驗證 Token
 - 機密欄位與 IG 連線 token 都以 AES-256-GCM 加密（`internal/secrets`），鑰匙＝env `SECRET_KEY`；未設時由 `JWT_SECRET` 推導（MVP 兜底，畢業前要設獨立 `SECRET_KEY`，換鑰匙＝已存密文讀不回）。API 只回尾 4 碼
 - 「測試連線」用 Anthropic Models List（不計費）；IG App 沒有可靠的便宜檢查，未做
+
+## 單一登入
+
+- 一個帳號同時只能在一台裝置登入：每次登入產生隨機 `admin_users.session_id`，放進 JWT 的 `sid`；`auth.Middleware` 每次請求比對，不符 → 401＋清 cookie
+  - DB 有別的 session＝已在其他裝置登入 → `{"error":"此帳號已在其他裝置登入，你已被登出","code":"session_replaced"}`，前端 `api/http.ts` 先跳提示再導去登入頁；被踢的那邊記一筆「被踢」（同一個舊 session 只記一次，唯一索引去重）
+  - DB 沒有 session（登出、被停用、被重設密碼）或舊版沒有 `sid` 的 token → 一般 401（升級上線後所有人要重新登入一次）
+- 撤銷時機：登出（只有 token 仍是目前 session 才清，被踢的舊裝置登出不影響新裝置）、管理員被停用（重新啟用後仍要重新登入）、被重設密碼。改自己的密碼不撤銷
+- SSE（`/api/inbox/stream`）每 25 秒心跳重讀登入者，session 不同即斷線
+- 在線：`last_seen_at` 由 middleware 最多每分鐘寫一次；管理員清單回 `lastSeenAt`、`online`（2 分鐘內有動靜且有有效 session）
+
+## 操作紀錄
+
+- 表 `audit_logs`（`internal/audit`）：admin_id（登入失敗找不到帳號時 NULL）、admin_name 快照、action（機器鍵）、summary（中文）、target_type／target_id、ig_account_id（不設 FK）、detail jsonb、ip、user_agent、status、success。保留 365 天，背景每日清（`audit.Store.RunCleanup`）
+- 記什麼：登入後所有異動請求（POST/PUT/PATCH/DELETE，含 4xx/5xx 失敗、權限不足）由 `httpapi.auditMiddleware` 在回應後記（方法、chi 路由樣式、URL 參數、狀態碼、登入者）；登入成功／失敗（記嘗試的帳號，不記密碼）、登出、被踢、IG OAuth callback 連結成功／失敗由各 handler 記。背景自動動作（AI 回覆、自動黑名單、降頻）不記，看 messages／contacts
+- 動作名稱：`internal/audit/actions.go` 的 `Routes`「方法＋路由樣式 → 鍵＋中文名」；`router.go` 新增異動路由要一併登記（`TestRouteNamesCoverRouter` 會抓漏；漏了退回「METHOD 樣式」）
+- body 摘要：只記 JSON；鍵名（小寫去符號後）含 password／passwd／pwd／token／secret／apikey／session／cookie／authorization／credential 或以 key 結尾 → 值換成「[已遮蔽]」（空值保留）；字串截 200 字、陣列 50 項；改密碼／重設密碼／上傳媒體整個 body 不記；無法解析或超過 1MB 不記內容
+- 帳號歸屬：依目標資源查 DB（對話、訊息、待改進、顧客、貼文、規則、知識庫、IG 帳號），其次 `?account=`、body 的 `account`／`igAccountId`；都沒有＝不屬於帳號
+- API（`audit` 權限「操作紀錄」）：`GET /api/audit-logs?admin=&action=&from=&to=&account=&page=&pageSize=`（from/to 收 RFC3339 或 YYYY-MM-DD；只看部分帳號的人只看得到自己帳號的與不屬於帳號的紀錄，`?account=` 範圍外 403）、`GET /api/audit-logs/actions`（篩選下拉）、`GET /api/audit-logs/admins`（管理員下拉）
+- 前端：`views/admins/AuditLogPanel.vue`、`api/audit.ts`
+- IP 取 `X-Forwarded-For` 第一個（反向代理後），否則 RemoteAddr；未在代理後面時可被偽造
 
 ## TODO（MVP 期間範圍外，畢業時進 ledger）
 
@@ -108,7 +128,6 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 - Unified Login 沒有 account_type，無法擋個人帳號（個人帳號本來也指派不到業務組合）
 - 斷開連線不會呼叫 DELETE subscribed_apps（webhook 改由「未連結的帳號」拒收）
 - 標籤是全店共用的；只看部分帳號的人仍能新增／改名／刪除標籤
-- 管理員重設密碼不會撤銷對方既有 session
 - AI 騷擾判斷（abusive）與降頻模式的 prompt 未以真模型實測；誤判時只能人工解除
 - ai_unsure 會連同「規則性轉真人」（訂位確認、客訴等 AI 依規定轉的）一起記，待改進清單可能偏多
 - 降頻歸零以「該則與前一則顧客訊息的間隔」判斷，依賴各則的處理順序（同對話有鎖、合併等待相同，正常情況依序）；降頻自動加的問題顧客標記不會自動解除

@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus } from '@element-plus/icons-vue'
 import { adminsApi, permMeta } from '@/api/admins'
 import { useAuthStore, type AdminUser, type Perm } from '@/stores/auth'
+import HelpTip from '@/components/HelpTip.vue'
 import { shortTime } from '@/utils/time'
 
 const auth = useAuthStore()
@@ -170,7 +171,10 @@ async function toggleDisabled(u: AdminUser) {
 <template>
   <div v-loading="loading" class="admins">
     <div class="head">
-      <p class="muted">每位管理員用自己的帳號登入；店長擁有全部權限，其他人依勾選的功能使用後台。</p>
+      <div class="head-title">
+        共 {{ admins.length }} 位
+        <HelpTip text="每位管理員用自己的帳號登入；店長擁有全部權限，其他人依勾選的功能使用後台。總覽、深色模式與修改密碼（頭像選單）所有人都能用。" />
+      </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">新增管理員</el-button>
     </div>
 
@@ -191,8 +195,12 @@ async function toggleDisabled(u: AdminUser) {
           <span class="perms">{{ roleSummary(u) }}</span>
         </div>
         <div class="login">
-          <span class="label">最後登入</span>
-          {{ u.lastLoginAt ? shortTime(u.lastLoginAt) : '從未登入' }}
+          <span class="presence" :class="{ on: u.online }" :aria-label="u.online ? '在線' : '離線'" />
+          <template v-if="u.online">在線</template>
+          <template v-else>
+            <span class="label">最後活動</span>
+            {{ u.lastSeenAt || u.lastLoginAt ? shortTime((u.lastSeenAt || u.lastLoginAt)!) : '從未登入' }}
+          </template>
         </div>
         <div class="status">
           <el-tag size="small" :type="u.disabled ? 'info' : 'success'" effect="light">
@@ -224,20 +232,17 @@ async function toggleDisabled(u: AdminUser) {
         <el-form-item label="店長">
           <div class="owner-row">
             <el-switch v-model="form.isOwner" :disabled="ownerSwitchDisabled" />
-            <span class="muted small">
-              {{ ownerSwitchDisabled ? '只有店長能設定店長' : '店長擁有全部權限，且不受下方勾選限制' }}
-            </span>
+            <HelpTip :text="ownerSwitchDisabled ? '只有店長能設定店長。' : '店長擁有全部權限，且不受下方勾選限制。'" />
           </div>
         </el-form-item>
         <el-form-item label="功能權限">
           <el-checkbox-group v-if="!form.isOwner" v-model="form.permissions" class="perm-grid">
             <el-checkbox v-for="p in allPerms" :key="p" :value="p" :disabled="permDisabled(p)">
               <span class="perm-label">{{ permMeta[p]?.label ?? p }}</span>
-              <span class="perm-desc">{{ permMeta[p]?.desc }}</span>
+              <HelpTip v-if="permMeta[p]?.desc" :text="permMeta[p]?.desc" />
             </el-checkbox>
           </el-checkbox-group>
           <p v-else class="muted small">店長擁有全部權限。</p>
-          <p class="muted small hint">總覽與設定頁的「外觀」「管理員密碼」所有人都看得到。</p>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -249,15 +254,30 @@ async function toggleDisabled(u: AdminUser) {
 </template>
 
 <style scoped lang="scss">
+.presence {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--lc-border);
+  &.on {
+    background: var(--el-color-success);
+  }
+}
 .head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
-  p {
-    margin: 0;
-    line-height: 1.6;
+  .head-title {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 600;
+    min-height: 32px;
   }
   .el-button {
     flex: none;
@@ -277,7 +297,7 @@ async function toggleDisabled(u: AdminUser) {
 }
 .row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) minmax(140px, 1.6fr) 110px 70px auto;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(160px, 1.8fr) 100px 76px 200px;
   align-items: center;
   gap: 12px;
   padding: 12px 0;
@@ -367,7 +387,7 @@ async function toggleDisabled(u: AdminUser) {
   }
   :deep(.el-checkbox__label) {
     display: flex;
-    flex-direction: column;
+    align-items: center;
     white-space: normal;
     line-height: 1.4;
   }
@@ -375,17 +395,7 @@ async function toggleDisabled(u: AdminUser) {
 .perm-label {
   font-size: 14px;
 }
-.perm-desc {
-  font-size: 12px;
-  color: var(--lc-muted);
-}
-.hint {
-  margin: 8px 0 0;
-}
 @media (max-width: 768px) {
-  .head {
-    flex-direction: column;
-  }
   .row {
     grid-template-columns: 1fr auto;
     gap: 6px 12px;

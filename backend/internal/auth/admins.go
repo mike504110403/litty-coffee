@@ -254,7 +254,8 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor User, id int64, p Admin
 
 	u, err := scanUser(tx.QueryRow(ctx, `
 UPDATE admin_users SET display_name = $2, is_owner = $3, permissions = $4,
-  disabled_at = CASE WHEN NOT $5 THEN NULL ELSE COALESCE(disabled_at, now()) END, ig_account_ids = $6
+  disabled_at = CASE WHEN NOT $5 THEN NULL ELSE COALESCE(disabled_at, now()) END, ig_account_ids = $6,
+  session_id = CASE WHEN $5 THEN NULL ELSE session_id END
 WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled, newAccounts))
 	if err != nil {
 		return User{}, err
@@ -263,6 +264,7 @@ WHERE id = $1 RETURNING `+userCols, id, newName, newOwner, newPerms, newDisabled
 }
 
 // ResetPassword 由管理員直接重設別人的密碼（自己的密碼請用 ChangePassword，需驗舊密碼）。
+// 同時撤銷對方目前的 session（被重設的人要用新密碼重新登入）。
 func (s *Service) ResetPassword(ctx context.Context, actor User, id int64, password string) error {
 	if err := checkPassword(password); err != nil {
 		return err
@@ -284,6 +286,6 @@ func (s *Service) ResetPassword(ctx context.Context, actor User, id int64, passw
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.Exec(ctx, `UPDATE admin_users SET password_hash = $2 WHERE id = $1`, id, string(hash))
+	_, err = s.DB.Exec(ctx, `UPDATE admin_users SET password_hash = $2, session_id = NULL WHERE id = $1`, id, string(hash))
 	return err
 }

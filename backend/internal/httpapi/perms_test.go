@@ -15,6 +15,7 @@ import (
 
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
+	"github.com/mike504110403/litty-coffee/backend/internal/audit"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
 	"github.com/mike504110403/litty-coffee/backend/internal/db"
@@ -42,13 +43,13 @@ func setupServer(t *testing.T) (*httptest.Server, *auth.Service, *pgxpool.Pool) 
 	if _, err := pool.Exec(context.Background(), `TRUNCATE admin_users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
-	authSvc := &auth.Service{DB: pool, Secret: []byte("test-secret")}
+	authSvc := &auth.Service{DB: pool, Secret: []byte("test-secret"), Audit: &audit.Store{DB: pool}}
 	if err := authSvc.EnsureAdmin(context.Background(), "boss", "boss-password"); err != nil {
 		t.Fatal(err)
 	}
 	store := &media.Store{DB: pool, Dir: t.TempDir()}
 	s := &Server{
-		DB: pool, Auth: authSvc, Hub: realtime.NewHub(),
+		DB: pool, Auth: authSvc, Hub: realtime.NewHub(), Audit: authSvc.Audit,
 		Inbox:     inbox.NewService(pool, ig.NewFake(), realtime.NewHub()),
 		CRM:       &crm.Service{DB: pool},
 		Analytics: &analytics.Service{DB: pool, Loc: time.UTC},
@@ -117,6 +118,9 @@ var probes = []struct {
 	{auth.PermIGAccounts, "GET", "/api/settings", "", 200},
 	{auth.PermCredentials, "PUT", "/api/settings/credentials", "x", 400},
 	{auth.PermAdmins, "GET", "/api/admins", "", 200},
+	{auth.PermAudit, "GET", "/api/audit-logs", "", 200},
+	{auth.PermAudit, "GET", "/api/audit-logs/actions", "", 200},
+	{auth.PermAudit, "GET", "/api/audit-logs/admins", "", 200},
 }
 
 func TestEachPermissionGatesItsRoutes(t *testing.T) {

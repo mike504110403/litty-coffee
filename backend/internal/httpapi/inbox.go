@@ -188,7 +188,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, m)
 }
 
-// streamPing 是 SSE 心跳間隔；每次心跳重讀登入者，停用、失去收件匣權限或可見帳號變更立即生效。
+// streamPing 是 SSE 心跳間隔；每次心跳重讀登入者，停用、失去收件匣權限、被別處登入踢掉或可見帳號變更立即生效。
 var streamPing = 25 * time.Second
 
 // inboxStream 用 SSE 推送新訊息與對話更新；只推登入者看得到的帳號的事件。
@@ -215,7 +215,8 @@ func (s *Server) inboxStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ping.C:
 			u, err := s.Auth.Me(r.Context(), user.ID)
-			if err != nil || u.Disabled || !u.Can(auth.PermInbox) {
+			// 停用、失去收件匣權限、session 被別處登入取代或撤銷 → 斷線
+			if err != nil || u.Disabled || !u.Can(auth.PermInbox) || !u.SameSession(user) {
 				return
 			}
 			user = u

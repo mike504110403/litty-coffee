@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import HelpTip from '@/components/HelpTip.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   credentialsApi,
@@ -7,6 +8,9 @@ import {
   type CredentialSource,
   type Credentials,
 } from '@/api/credentials'
+
+// 每張卡共用的存檔說明（放在 ? 提示裡）
+const saveNote = ' 存檔後立即生效，不用重啟；後台儲存的值優先於 .env，「清除後台設定」會退回 .env；機密欄位加密存放，只顯示尾 4 碼。'
 
 interface FieldDef {
   key: CredentialKey
@@ -185,12 +189,16 @@ async function testAi() {
       <template #header>
         <div class="card-head">
           <span class="title">{{ g.title }}</span>
+          <HelpTip :text="g.desc + saveNote" />
         </div>
       </template>
-      <p class="muted desc">{{ g.desc }}</p>
 
       <el-form label-position="top" @submit.prevent="save(g)">
-        <el-form-item v-for="f in g.fields" :key="f.key" :label="f.label">
+        <el-form-item v-for="f in g.fields" :key="f.key">
+          <template #label>
+            {{ f.label }}
+            <HelpTip v-if="f.help" :text="f.help" />
+          </template>
           <div class="field">
             <div class="input-row">
               <template v-if="data && showInput(f)">
@@ -217,7 +225,6 @@ async function testAi() {
               <el-tag size="small" effect="light" :type="sourceMeta[data[f.key].source].type">
                 {{ sourceMeta[data[f.key].source].label }}
               </el-tag>
-              <span v-if="f.help" class="muted small">{{ f.help }}</span>
               <el-button
                 v-if="data[f.key].source === 'db'"
                 class="clear"
@@ -248,18 +255,21 @@ async function testAi() {
         {{ testResult.text }}
       </p>
     </el-card>
-
-    <p class="muted small foot">
-      存檔後立即生效，不用重啟。後台儲存的值優先於 .env；「清除後台設定」會退回 .env。機密欄位加密存放，儲存後只會顯示尾 4 碼。
-    </p>
   </div>
 </template>
 
 <style scoped lang="scss">
 .creds {
-  display: flex;
-  flex-direction: column;
+  // 桌機並排兩張卡；窗格不夠寬（< 2×380px）自動退成單欄
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 16px;
+  align-items: start;
+}
+@media (max-width: 480px) {
+  .creds {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .card {
   border-radius: var(--lc-radius);
@@ -276,10 +286,6 @@ async function testAi() {
 }
 .small {
   font-size: 12.5px;
-}
-.desc {
-  margin: 0 0 14px;
-  line-height: 1.6;
 }
 .field {
   width: 100%;
@@ -328,10 +334,6 @@ async function testAi() {
   &.bad {
     color: var(--el-color-danger);
   }
-}
-.foot {
-  margin: 0;
-  line-height: 1.6;
 }
 @media (max-width: 640px) {
   .meta .clear {

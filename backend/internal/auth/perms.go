@@ -18,11 +18,12 @@ const (
 	PermIGAccounts  = "ig_accounts" // 連結／斷開／續期 IG 帳號、串接資訊
 	PermCredentials = "credentials" // IG App／Claude 憑證
 	PermAdmins      = "admins"      // 管理員帳號
+	PermAudit       = "audit"       // 操作紀錄（看所有管理員的登入與異動紀錄）
 )
 
 // AllPerms 是完整權限清單（順序即前端顯示順序）。
 var AllPerms = []string{PermInbox, PermContacts, PermAutomation, PermSchedule, PermAnalytics,
-	PermIGAccounts, PermCredentials, PermAdmins}
+	PermIGAccounts, PermCredentials, PermAdmins, PermAudit}
 
 var permLabels = map[string]string{
 	PermInbox:       "收件匣",
@@ -33,6 +34,7 @@ var permLabels = map[string]string{
 	PermIGAccounts:  "IG 帳號",
 	PermCredentials: "串接憑證",
 	PermAdmins:      "管理員",
+	PermAudit:       "操作紀錄",
 }
 
 func validPerm(p string) bool { return slices.Contains(AllPerms, p) }

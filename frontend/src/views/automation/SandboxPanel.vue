@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HelpTip from '@/components/HelpTip.vue'
 import { nextTick, ref } from 'vue'
 import { Promotion, RefreshLeft } from '@element-plus/icons-vue'
 import { automationApi, intentLabels, type Outcome } from '@/api/automation'
@@ -64,9 +65,9 @@ function onKeydown(ev: Event | KeyboardEvent) {
 <template>
   <div class="sandbox lc-card">
     <div class="s-head">
-      <div>
+      <div class="s-title">
         <strong>試答沙盒</strong>
-        <span>用目前的規則與知識庫試回覆，不會送給任何人（AI 開關關閉時也會試 AI）。</span>
+        <HelpTip text="用目前的規則與知識庫試回覆，不會送給任何人（AI 開關關閉時也會試 AI）。" />
       </div>
       <el-button v-if="lines.length" text :icon="RefreshLeft" @click="lines = []">清空</el-button>
     </div>
@@ -122,12 +123,10 @@ function onKeydown(ev: Event | KeyboardEvent) {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--lc-border);
-  span {
-    display: block;
-    font-size: 12px;
-    color: var(--lc-muted);
-    margin-top: 2px;
-  }
+}
+.s-title {
+  display: flex;
+  align-items: center;
 }
 .s-body {
   flex: 1;

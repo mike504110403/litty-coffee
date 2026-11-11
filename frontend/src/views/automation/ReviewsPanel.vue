@@ -72,9 +72,6 @@ const replyLabel = (r: Review) => (r.replySender === 'bot' ? (r.ruleName ? `規�
         ]"
       />
     </div>
-    <p class="intro">
-      「回答有誤」是同事在收件匣標記的自動回覆；「AI 沒把握」是 AI 轉真人或拒答時自動記下的問題。補好知識庫或規則後標為已處理。
-    </p>
 
     <div v-loading="loading" class="items">
       <article v-for="r in list" :key="r.id" class="item lc-card" :class="{ resolved: !!r.resolvedAt }">
@@ -135,19 +132,21 @@ const replyLabel = (r: Review) => (r.replySender === 'bot' ? (r.ruleName ? `規�
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-}
-.intro {
-  margin: 10px 0 14px;
-  font-size: 13px;
-  color: var(--lc-muted);
-  line-height: 1.6;
+  margin-bottom: 14px;
 }
 .items {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-height: 120px;
-  max-width: 860px;
+}
+@media (min-width: 1100px) {
+  // 桌機兩欄卡片；高度各自撐開
+  .items {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
 }
 .item {
   padding: 14px 16px;

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HelpTip from '@/components/HelpTip.vue'
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { settingsApi, type IgAccount, type IgConnection, type SettingsInfo } from '@/api/settings'
@@ -175,8 +176,10 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
 
     <div v-if="loose.length" class="conn">
       <div v-if="info.manageConnections" class="conn-head">
-        <div class="conn-title"><strong>未連結的帳號</strong></div>
-        <div class="conn-sub">對話與顧客資料都保留；重新連結（授權時勾選這些帳號）即可恢復收發</div>
+        <div class="conn-title">
+          <strong>未連結的帳號</strong>
+          <HelpTip text="對話與顧客資料都保留；重新連結（授權時勾選這些帳號）即可恢復收發。" />
+        </div>
       </div>
       <div class="rows">
         <div v-for="a in loose" :key="a.id" class="row">
@@ -213,14 +216,6 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
     <p v-if="!info.accounts.length && !info.manageConnections" class="muted">你目前沒有可見的 IG 帳號。</p>
 
     <div v-if="info.manageConnections" class="connect">
-      <p v-if="!info.accounts.length">
-        連結店家的 IG 專業帳號後，後台才能收發私訊、自動回覆和排程發文。按下按鈕會轉到 Facebook 登入並授權，完成後自動回到這裡。
-      </p>
-      <ul>
-        <li>使用 Instagram API with Unified Login：一次授權可連多個 IG 專業帳號（授權畫面勾選要連的帳號）</li>
-        <li>授權後會同步這個授權看得到的全部帳號；之後在 Meta 加減帳號，按「同步帳號」即可</li>
-        <li>帳號要是「商家」或「創作者」帳號，並已連到業務組合</li>
-      </ul>
       <el-alert
         v-if="!integ.oauthReady"
         type="warning"
@@ -246,19 +241,37 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
         title="沒有連線的帳號會暫用後端 .env 的 IG_ACCESS_TOKEN；連結後改用連線的授權"
         class="alert"
       />
-      <el-button type="primary" :disabled="!integ.oauthReady" @click="connect">
-        {{ info.connections.length ? '連結其他 IG 帳號' : '連結 IG 帳號' }}
-      </el-button>
+      <p v-if="!info.accounts.length" class="empty-line">還沒有連結任何 IG 帳號</p>
+      <div class="connect-row">
+        <el-button type="primary" :disabled="!integ.oauthReady" @click="connect">
+          {{ info.connections.length ? '連結其他 IG 帳號' : '連結 IG 帳號' }}
+        </el-button>
+        <HelpTip :width="340">
+          連結後才能收發私訊、自動回覆和排程發文；按下按鈕會轉到 Facebook 登入並授權，完成後自動回到這裡。
+          一次授權可連多個 IG 專業帳號（授權畫面勾選要連的帳號），並同步這個授權看得到的全部帳號；之後在 Meta
+          加減帳號，按「同步帳號」即可。帳號要是「商家」或「創作者」帳號，並已連到業務組合。
+        </HelpTip>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
+.ig-panel {
+  // 多個業務組合時桌機並排；只有一個就撐滿
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.connect,
+.muted {
+  grid-column: 1 / -1;
+}
 .conn {
   border: 1px solid var(--lc-border);
   border-radius: 14px;
   padding: 14px;
-  margin-bottom: 14px;
 }
 .conn-title {
   display: flex;
@@ -331,23 +344,24 @@ const resubscribe = (a: IgAccount) => after(() => settingsApi.resubscribe(a.id),
 .actions {
   margin-top: 10px;
 }
-.connect {
-  p {
-    margin: 0 0 8px;
-    line-height: 1.6;
-    font-size: 14px;
-  }
-  ul {
-    margin: 0 0 14px;
-    padding-left: 20px;
-    color: var(--lc-muted);
-    font-size: 13px;
-    line-height: 1.8;
-  }
+.empty-line {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--lc-muted);
+}
+.connect-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .muted {
   color: var(--lc-muted);
   font-size: 13px;
+}
+@media (max-width: 480px) {
+  .ig-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 @media (max-width: 768px) {
   .row {

@@ -8,6 +8,7 @@ import ContactAvatar from '@/components/ContactAvatar.vue'
 import AccountTag from '@/components/AccountTag.vue'
 import RiskTag from '@/components/RiskTag.vue'
 import RiskMenu from '@/components/RiskMenu.vue'
+import HelpTip from '@/components/HelpTip.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { clockTime, dayKey, dayLabel } from '@/utils/time'
 
@@ -284,7 +285,10 @@ const handler = computed({
     </div>
 
     <footer class="t-foot">
-      <div class="window" :class="windowState.kind">{{ windowState.text }}</div>
+      <div class="window" :class="windowState.kind">
+        {{ windowState.text }}
+        <HelpTip v-if="conversation.handler === 'bot'" text="送出訊息後會自動切成「真人」，AI 暫停回覆這位顧客。" />
+      </div>
       <div class="composer">
         <el-input
           v-model="draft"
@@ -305,10 +309,13 @@ const handler = computed({
           @click="submit"
         />
       </div>
-      <div v-if="conversation.handler === 'bot'" class="hint">送出訊息後會自動切成「真人」，AI 暫停回覆這位顧客</div>
     </footer>
 
-    <el-dialog v-model="wrongOpen" title="標記回答有誤" width="min(460px, 92vw)" append-to-body align-center>
+    <el-dialog v-model="wrongOpen" width="min(460px, 92vw)" append-to-body align-center>
+      <template #header>
+        標記回答有誤
+        <HelpTip text="會記到「自動回覆 → 待改進」，之後可補進知識庫或調整規則。" />
+      </template>
       <div v-if="wrongMsg" class="wrong-quote">{{ wrongMsg.text }}</div>
       <el-input
         v-model="wrongNote"
@@ -318,7 +325,6 @@ const handler = computed({
         show-word-limit
         placeholder="哪裡有誤、正確答案是什麼？例如：週一公休，不是營業到八點"
       />
-      <p class="wrong-hint">會記到「自動回覆 → 待改進」，之後可補進知識庫或調整規則。</p>
       <template #footer>
         <el-button @click="wrongOpen = false">取消</el-button>
         <el-button type="primary" :loading="wrongSaving" :disabled="!wrongNote.trim()" @click="submitWrong">送出</el-button>
@@ -418,11 +424,6 @@ const handler = computed({
   white-space: pre-wrap;
   max-height: 120px;
   overflow-y: auto;
-}
-.wrong-hint {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--lc-muted);
 }
 .t-body {
   flex: 1;
@@ -597,12 +598,6 @@ const handler = computed({
     box-shadow: 0 0 0 1px var(--lc-border) inset;
   }
 }
-.hint {
-  margin: 6px 4px 0;
-  font-size: 11px;
-  color: var(--lc-muted);
-}
-
 @media (max-width: 768px) {
   .t-head .back {
     display: inline-flex;

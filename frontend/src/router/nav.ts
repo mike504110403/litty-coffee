@@ -1,6 +1,6 @@
 import type { Component } from 'vue'
 import { markRaw } from 'vue'
-import { ChatDotRound, DataAnalysis, House, MagicStick, Calendar, User, Setting } from '@element-plus/icons-vue'
+import { ChatDotRound, DataAnalysis, House, MagicStick, Calendar, User, Setting, Avatar } from '@element-plus/icons-vue'
 import type { Perm } from '@/stores/auth'
 
 export interface NavItem {
@@ -10,7 +10,7 @@ export interface NavItem {
   icon: Component
   component: () => Promise<unknown>
   mobile: boolean // 是否出現在手機底部 tab bar（最多 5 個）
-  perm: Perm | null // 需要的功能權限；null＝所有登入者
+  perm: Perm | Perm[] | null // 需要的功能權限（陣列＝任一即可）；null＝所有登入者
 }
 
 export const navItems: NavItem[] = [
@@ -20,5 +20,6 @@ export const navItems: NavItem[] = [
   { path: 'schedule', name: 'schedule', title: '排程', icon: markRaw(Calendar), component: () => import('@/views/schedule/ScheduleView.vue'), mobile: true, perm: 'schedule' },
   { path: 'contacts', name: 'contacts', title: '顧客', icon: markRaw(User), component: () => import('@/views/ContactsView.vue'), mobile: false, perm: 'contacts' },
   { path: 'analytics', name: 'analytics', title: '分析', icon: markRaw(DataAnalysis), component: () => import('@/views/AnalyticsView.vue'), mobile: true, perm: 'analytics' },
-  { path: 'settings', name: 'settings', title: '設定', icon: markRaw(Setting), component: () => import('@/views/SettingsView.vue'), mobile: false, perm: null },
+  { path: 'settings', name: 'settings', title: '設定', icon: markRaw(Setting), component: () => import('@/views/SettingsView.vue'), mobile: false, perm: ['ig_accounts', 'credentials'] },
+  { path: 'admins', name: 'admins', title: '管理員', icon: markRaw(Avatar), component: () => import('@/views/admins/AdminsView.vue'), mobile: false, perm: 'admins' },
 ]

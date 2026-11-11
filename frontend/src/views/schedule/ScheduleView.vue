@@ -163,8 +163,7 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
   <div>
     <div class="head">
       <div>
-        <h1 class="lc-page-title">排程</h1>
-        <p class="lc-page-sub">規劃 IG 貼文、輪播、Reels 與限動，時間到自動發佈</p>
+        <h1 class="lc-page-title lc-page-title--solo">排程</h1>
       </div>
       <div class="controls">
         <AccountSelect v-if="accounts.multi" v-model="accountFilter" allow-all class="acc-filter" />
@@ -449,6 +448,25 @@ const canAddOn = (d: Date) => d.getTime() >= new Date().setHours(0, 0, 0, 0)
 
 .agenda {
   min-height: 120px;
+}
+@media (min-width: 1024px) {
+  // 桌機清單：每天一個標題，底下的貼文兩欄並排
+  .agenda {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    align-items: start;
+    .ag-day,
+    :deep(.el-empty) {
+      grid-column: 1 / -1;
+    }
+    .ag-day {
+      margin: 12px 0 0;
+    }
+    .ag-item {
+      margin-bottom: 0;
+    }
+  }
 }
 .ag-day {
   font-size: 13px;

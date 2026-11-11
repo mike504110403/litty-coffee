@@ -94,7 +94,7 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
 <template>
   <el-drawer
     v-model="open"
-    :size="isMobile ? '85%' : '420px'"
+    :size="isMobile ? '85%' : 'min(760px, 90vw)'"
     :direction="isMobile ? 'btt' : 'rtl'"
     :with-header="false"
     :class="{ 'sheet': isMobile }"
@@ -112,6 +112,8 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
           <el-button v-if="detail.conversationId" type="primary" round :icon="ChatDotRound" @click="goChat">對話</el-button>
         </div>
 
+        <div class="cols">
+          <div class="col">
         <div class="risk-row">
           <div class="risk-info">
             <RiskTag v-if="detail.risk" :risk="detail.risk" />
@@ -156,6 +158,8 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
           <dd>{{ detail.handler === 'human' ? '真人' : detail.handler === 'bot' ? 'AI 接待' : '—' }}</dd>
         </dl>
 
+          </div>
+          <div class="col">
         <h4>標籤</h4>
         <el-select
           :model-value="tagIds"
@@ -195,6 +199,8 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
           </span>
         </div>
         <p v-else class="muted">AI 回覆過才會累積</p>
+          </div>
+        </div>
       </template>
     </div>
   </el-drawer>
@@ -305,6 +311,27 @@ const tagColor = (id: number | string) => allTags.value.find((t) => t.id === id)
 h4 {
   margin: 18px 0 8px;
   font-size: 14px;
+}
+// 桌機：左欄＝狀態與數字、右欄＝標籤／備註／常問；手機仍是單欄
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 28px;
+  align-items: start;
+}
+.col:first-child .risk-row {
+  margin-top: 20px;
+}
+.col + .col h4:first-child {
+  margin-top: 20px;
+}
+@media (max-width: 768px) {
+  .cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .col + .col h4:first-child {
+    margin-top: 18px;
+  }
 }
 .tag-select {
   width: 100%;

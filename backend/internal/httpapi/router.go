@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,7 @@ import (
 	"github.com/mike504110403/litty-coffee/backend/internal/account"
 	"github.com/mike504110403/litty-coffee/backend/internal/analytics"
 	"github.com/mike504110403/litty-coffee/backend/internal/appsettings"
+	"github.com/mike504110403/litty-coffee/backend/internal/audit"
 	"github.com/mike504110403/litty-coffee/backend/internal/auth"
 	"github.com/mike504110403/litty-coffee/backend/internal/automation"
 	"github.com/mike504110403/litty-coffee/backend/internal/crm"
@@ -40,6 +42,7 @@ type Server struct {
 	AnthropicBaseURL string
 	Accounts         *account.Service
 	Info             SystemInfo
+	Audit            *audit.Store // 操作紀錄；nil＝不記
 }
 
 func (s *Server) Routes() http.Handler {
@@ -62,7 +65,7 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
 		r.Group(func(r chi.Router) {
-			r.Use(s.Auth.Middleware)
+			r.Use(s.Auth.Middleware, s.auditMiddleware) // 異動請求一律記操作紀錄（含權限不足）
 			// 所有登入者都可用
 			r.Get("/auth/me", s.me)
 			r.Post("/auth/password", s.changePassword)
@@ -81,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 			s.settingsRoutes(perm(auth.PermIGAccounts))
 			s.credentialsRoutes(perm(auth.PermCredentials))
 			s.adminRoutes(perm(auth.PermAdmins))
+			s.auditRoutes(perm(auth.PermAudit))
 			dev := perm(auth.PermInbox)
 			dev.Get("/dev/status", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]bool{"simulator": s.Fake != nil})
@@ -101,10 +105,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	u, tok, err := s.Auth.Login(r.Context(), in.Username, in.Password)
 	if errors.Is(err, auth.ErrBadCredentials) {
+		s.recordLoginFailed(r, in.Username, "帳號或密碼錯誤", http.StatusUnauthorized)
 		writeErr(w, http.StatusUnauthorized, "帳號或密碼錯誤")
 		return
 	}
 	if errors.Is(err, auth.ErrDisabled) {
+		s.recordLoginFailed(r, in.Username, err.Error(), http.StatusForbidden)
 		writeErr(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -112,11 +118,39 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "login failed")
 		return
 	}
+	s.recordAuth(r, audit.Entry{AdminID: u.ID, AdminName: u.DisplayName, Action: audit.ActionLogin,
+		Detail: map[string]any{"username": u.Username}, Status: http.StatusOK, Success: true})
 	s.Auth.SetCookie(w, tok, 7*24*3600)
 	writeJSON(w, http.StatusOK, u)
 }
 
+// recordLoginFailed 記登入失敗：只記嘗試的帳號（不記密碼）；帳號存在時掛上該管理員。
+func (s *Server) recordLoginFailed(r *http.Request, username, reason string, status int) {
+	if s.Audit == nil {
+		return
+	}
+	e := audit.Entry{Action: audit.ActionLoginFailed, AdminName: audit.Truncate(username),
+		Detail: map[string]any{"username": audit.Truncate(username), "reason": reason}, Status: status}
+	var name string
+	if err := s.DB.QueryRow(r.Context(), `SELECT id, display_name FROM admin_users WHERE username = $1`, username).
+		Scan(&e.AdminID, &name); err == nil {
+		e.AdminName = name
+	}
+	s.recordAuth(r, e)
+}
+
+// logout 清 cookie；token 仍是目前有效的 session 時一併結束它（session_id 清空）並記紀錄。
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(auth.CookieName); err == nil {
+		u, ok, err := s.Auth.Logout(r.Context(), c.Value)
+		if err != nil {
+			log.Printf("logout: %v", err)
+		}
+		if ok {
+			s.recordAuth(r, audit.Entry{AdminID: u.ID, AdminName: u.DisplayName, Action: audit.ActionLogout,
+				Detail: map[string]any{"username": u.Username}, Status: http.StatusNoContent, Success: true})
+		}
+	}
 	s.Auth.SetCookie(w, "", -1)
 	w.WriteHeader(http.StatusNoContent)
 }
