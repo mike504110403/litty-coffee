@@ -130,6 +130,7 @@ cd frontend && npm install && npm run dev          # :5190，/api 代理到 :879
 ## 總覽（監控＋分析合併）、每日摘要、AI 建議回覆
 
 - 「分析」已併入總覽（`/analytics` 轉 `/dashboard`）；頁面不放說明段落，必要說明用 `components/HelpTip.vue` 的 `?`
+- 手機體驗是一級需求（Mike 2026-11-12：「整個後台都要考慮手機使用的絲滑體驗」）：每個改動都要在 390 寬實測；不擠、不出現巢狀小捲動區、點日期不叫出鍵盤、編輯類用全螢幕；主要分頁 KeepAlive＋切 tab 保留捲動位置（`router/index.ts` scrollBehavior）；手機總覽分「概況／圖表／貼文」、圖表左右滑
 - 系統狀態：`internal/monitor` 每 60 秒檢查（每個 IG 帳號的 token／訂閱／最後收到 webhook、Claude key 與最近一次呼叫、webhook 積壓、排程貼文、DB），閾值在 `monitor.go` 開頭；`GET /api/system/status` 依可見帳號過濾；轉紅與恢復時推 `system.alert`（`GET /api/system/stream`，給有 `automation` 權限者＝含店長、超管）；token 失效同時寫連線 `last_error`
 - 自動回覆總開關：`automation_settings.auto_reply_enabled`（依帳號），關閉＝只收不回（不跑規則／AI／降頻／轉真人通知）
 - 每日摘要：`internal/digest`，每帳號在 `automation_settings.digest_time`（預設 09:00，`TZ_STORE`）整理前一天；重要度排序見 `digest/score.go`；AI 摘要只送統計與每則 ≤60 字節錄（輸入 ≤2400 字）；`GET /api/digests/latest`、`POST /api/digests/generate`
