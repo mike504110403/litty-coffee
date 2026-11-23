@@ -286,6 +286,9 @@ func TestExpiryFromExchangeAndDebugToken(t *testing.T) {
 	s, now := setup(t, newClient(m))
 	ctx := context.Background()
 	m.expiresIn = int64(10 * 24 * 3600)
+	// ig.Exchange 用真實時鐘把 expires_in 換成到期日，Store 的 now 要對齊真實時間，
+	// 否則固定的 setup 時間離今天越遠，「剩不到 RelinkWithin」的判斷就會失準（2026-11-24 起必失敗）
+	*now = time.Now()
 	conn, accs, err := s.Connect(ctx, "good-code")
 	if err != nil {
 		t.Fatal(err)
