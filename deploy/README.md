@@ -1,5 +1,8 @@
 # 部署（Lightsail 單機，dev＋prod）
 
+> **2026-11-24 主機搬遷**：litty 已從 Lightsail（litty-coffee 帳號）搬到 AWS 主帳號的 EC2 `wedding-server`（東京 t3.medium，與婚禮網站共用；Tailscale 名稱 wedding-server）。`/opt/litty/{dev,prod}`、備份腳本與 cron 照舊；CI 的 DEPLOY_HOST 改為 wedding-server，DEPLOY_KNOWN_HOSTS 為該主機的金鑰。下文提到 litty-server／Lightsail 的初始化步驟僅供重建參考。
+
+
 ## 架構
 
 ```

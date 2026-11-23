@@ -30,7 +30,7 @@ concurrency:
 env:
   BACKEND_IMAGE: ghcr.io/mike504110403/litty-coffee-backend
   WEB_IMAGE: ghcr.io/mike504110403/litty-coffee-web
-  DEPLOY_HOST: litty-server
+  DEPLOY_HOST: wedding-server  # 2026-11-24 搬到主帳號 EC2（與婚禮網站共用，t3.medium）；舊 Lightsail litty-server 已停用
 
 jobs:
   meta:
